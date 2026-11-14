@@ -21,7 +21,7 @@ La voz, el hardware Bluetooth, el proveedor real y los pagos CoDi quedan para et
 ## Criterios para decir “demo lista”
 
 - El despliegue de Vercel abre sin errores desde una URL pública.
-- El recorrido anterior puede ejecutarse desde cero sin credenciales especiales del jurado.
+- El presentador inicia sesión como comerciante; el jurado puede abrir la vista del cliente sin credenciales.
 - La vista del cliente nunca contiene la palabra antes de `PAID`.
 - Ninguna acción del navegador puede marcar un pago real como confirmado.
 - El README indica qué funciona, qué es simulado y qué falta.

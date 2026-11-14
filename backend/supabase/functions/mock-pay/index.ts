@@ -1,6 +1,6 @@
 // mock-pay — SOLO DEMO. Simula que el banco liquidó una carga del MockProvider y envía el
 // webhook firmado a /webhooks/mock. El estado PAID lo decide igualmente el webhook (servidor).
-// Protecciones (brecha B4): ENABLE_MOCK_PAY, x-mock-pay-token, JWT del dueño y provider = 'mock'.
+// Protecciones: ENABLE_MOCK_PAY, JWT del dueño y provider = 'mock'.
 import { requireUser, ownedStall } from "../_shared/auth.ts";
 import { serviceClient } from "../_shared/db.ts";
 import { json, preflight } from "../_shared/http.ts";
@@ -11,9 +11,6 @@ Deno.serve(async (req) => {
   if (pf) return pf;
   if (Deno.env.get("ENABLE_MOCK_PAY") !== "true") return new Response("Not found", { status: 404 });
   if (req.method !== "POST") return json(req, { error: "method" }, 405);
-
-  const token = Deno.env.get("MOCK_PAY_TOKEN");
-  if (!token || req.headers.get("x-mock-pay-token") !== token) return json(req, { error: "forbidden" }, 403);
 
   const caller = await requireUser(req);
   if (!caller) return json(req, { error: "unauthorized" }, 401);

@@ -13,13 +13,24 @@
   <header class="top">
     <h1>Comerciante · <span id="stallName">Puesto demo</span></h1>
     <nav>
-      <span class="pill live" id="live">Conectando…</span>
+      <span class="pill live" id="live">Inicia sesión</span>
+      <button class="pill" id="logout" type="button" style="display:none">Salir</button>
       <a class="pill" href="index.html" target="_top">Inicio</a>
     </nav>
   </header>
   <main>
     <div id="notice"></div>
-    <div class="grid">
+    <section class="card" id="loginPanel" style="max-width:420px;margin:32px auto">
+      <h2>Acceso del comerciante</h2>
+      <p class="meta">Inicia sesión para crear órdenes y activar pagos de prueba.</p>
+      <form id="loginForm" style="display:grid;gap:12px;margin-top:16px">
+        <label>Correo electrónico<br><input id="loginEmail" type="email" autocomplete="username" required style="width:100%;padding:10px"></label>
+        <label>Contraseña<br><input id="loginPassword" type="password" autocomplete="current-password" required style="width:100%;padding:10px"></label>
+        <button class="primary" type="submit">Entrar</button>
+        <p class="meta" id="loginMsg" role="status"></p>
+      </form>
+    </section>
+    <div class="grid" id="merchantPanel" style="display:none">
       <section class="card" aria-labelledby="newTitle">
         <h2 id="newTitle">Nuevo cobro</h2>
         <div class="amount" id="amount" aria-live="polite">$0.00</div>
@@ -84,7 +95,7 @@
           ${o.secretWord ? `<div class="word">🔒 ${escapeHtml(o.secretWord)}</div>` : ""}
           <div class="meta">${money(o.amountCents)} · ${o.method === "cash" ? "Efectivo" : "CoDi simulado"}${left !== null ? ` · expira en ${left}s` : ""}</div>
           ${active ? `<div class="actions">
-              <button class="primary" data-act="pay">El cliente paga (simulado)</button>
+              <button class="primary" data-act="pay">Simular pago del cliente</button>
               <button class="danger" data-act="cancel">Cancelar</button>
             </div>
             <details class="tests"><summary>Pruebas de seguridad</summary><div class="actions">
@@ -137,9 +148,23 @@
     async function boot() {
       if (!configured) { showConfigNotice($("notice")); $("create").disabled = true; return; }
       try {
-        await ensureSession();
+        const { data: auth, error } = await supabase.auth.getUser();
+        if (error || !auth.user) return;
+        await startMerchant();
+      } catch (err) { $("loginMsg").textContent = err.message; }
+    }
+    let started = false;
+    async function startMerchant() {
+      if (started) return;
+      await ensureSession();
+      started = true;
+      $("loginPanel").style.display = "none";
+      $("merchantPanel").style.display = "";
+      $("logout").style.display = "";
+      try {
         const { data: stall } = await supabase.from("stalls").select("name").eq("id", cfg.STALL_ID).maybeSingle();
-        if (stall) $("stallName").textContent = stall.name;
+        if (!stall) throw new Error("Esta cuenta no está vinculada al puesto de la demo.");
+        $("stallName").textContent = stall.name;
         await subscribe("merchant",
           (event, p) => {
             const prev = orders.get(p.orderId) ?? {};
@@ -151,6 +176,18 @@
           (ok, status) => { $("live").classList.toggle("on", ok); $("live").textContent = ok ? "En vivo" : `Polling (${status})`; });
       } catch (err) { $("notice").innerHTML = `<div class="notice error">${escapeHtml(err.message)}</div>`; }
     }
+    $("loginForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      $("loginMsg").textContent = "Iniciando sesión…";
+      const { error } = await supabase.auth.signInWithPassword({
+        email: $("loginEmail").value.trim(), password: $("loginPassword").value,
+      });
+      if (error) { $("loginMsg").textContent = error.message; return; }
+      $("loginPassword").value = "";
+      $("loginMsg").textContent = "";
+      await startMerchant();
+    });
+    $("logout").onclick = async () => { await supabase.auth.signOut({ scope: "local" }); location.reload(); };
     setInterval(render, 1000);
     renderAmount(); boot();
   </script>
