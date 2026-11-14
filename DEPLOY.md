@@ -4,12 +4,13 @@ Guía para desplegar el sistema completo desde el repositorio `copiloto-zeroui/`
 Basada en la **Especificación técnica v3**. Lo marcado **[VERIFICAR]** es un supuesto que hay que confirmar
 con la fuente primaria o con una prueba técnica antes de depender de él.
 
-> **Estado del repo (rama `feat/nivel1-mock-simulator`):** el **Nivel 1 está construido** y verificado contra
+> **Estado del repo:** el **Nivel 1 está construido**. La versión original se verificó contra
 > Supabase local: migraciones `0001`–`0005` (incluye 311 palabras), Edge Functions `orders`, `webhooks`, `reconcile`
-> y `mock-pay`, `MockProvider` con `mock_charges`, y el simulador web en `tools/simulator/`. Las brechas B1–B6 están
+> y `mock-pay`, `MockProvider` con `mock_charges`, y el simulador web en `tools/simulator/`. La nueva función `public-orders`
+> da acceso saneado a la pantalla del cliente sin compartir la sesión del comerciante; hay que repetir las pruebas con la cuenta nueva. Las brechas B1–B6 están
 > resueltas en el código; B7 (pey) sigue abierta a propósito. La app Android y la voz (Niveles 2 y 3) aún no existen.
-> **Atajo:** `PROJECT_REF=<ref> DB_PASSWORD='<...>' tools/deploy/deploy_cloud.sh` ejecuta las secciones 4.3–4.8,
-> genera `tools/simulator/config.js` y corre la verificación de la sección 9 (`tools/deploy/e2e_mock.sh`).
+> **Atajo:** `PROJECT_REF=<ref> DB_PASSWORD='<...>' STALL_ID=<uuid> tools/deploy/deploy_cloud.sh` despliega backend y
+> genera `tools/simulator/config.js` con datos públicos. La cuenta y el puesto se crean por separado; ver 4.5.
 >
 > Esta guía respeta las reglas de `AGENTS.md`: el servidor es la autoridad del estado, la palabra secreta nunca
 > llega a la vista del cliente antes de un pago verificado, los montos van en centavos enteros y la demo no usa
@@ -83,7 +84,6 @@ Se cargan con `supabase secrets set`. Los nombres son los usados en la spec o **
 |---|---|---|
 | `MOCK_WEBHOOK_SECRET` | Firma HMAC del proveedor simulado | `openssl rand -hex 32` |
 | `ENABLE_MOCK_PAY` * | `true` solo en dev y demo con Mock; `false` con pagos reales | Manual |
-| `MOCK_PAY_TOKEN` * | Protege `/mock-pay` aunque esté activo | `openssl rand -hex 24` |
 | `CRON_SECRET` * | Autentica la llamada de `pg_cron` a `reconcile` | `openssl rand -hex 32` |
 | `MIN_AMOUNT_CENTS` * | Monto mínimo por orden (ver brecha B1) | `500` en producción, `1` en pruebas con pey |
 | `PEY_API_KEY` *, `PEY_WEBHOOK_SECRET` *, `PEY_BASE_URL` * | Adaptador `providers/pey.ts` | `portal.pey.mx` / `docs.pey.mx` **[VERIFICAR nombres y esquema de firma]** |
@@ -106,7 +106,6 @@ Archivos `.env.example` a incluir en el repo:
 # backend/.env.secrets.example
 MOCK_WEBHOOK_SECRET=
 ENABLE_MOCK_PAY=true
-MOCK_PAY_TOKEN=
 CRON_SECRET=
 MIN_AMOUNT_CENTS=500
 # Nivel 4
@@ -125,7 +124,7 @@ VITE_SUPABASE_ANON_KEY=
 
 ## 3. Preflight: lo que debe existir y brechas de la spec
 
-### 3.1 Estado del repo y archivos esperados (de C1)
+### 3.1 Estado inicial del repo antes de construir Nivel 1 (de C1)
 
 Checkout revisado: commit `11c47be` ("docs: link live Vercel base"). Según su propio `README.md`, es solo
 estructura inicial.
@@ -168,9 +167,8 @@ Hay que desactivar `verify_jwt` en ambas (config abajo). `webhooks` se protege c
 `reconcile` debe verificar el header `x-cron-secret` contra `CRON_SECRET` (agregar al inicio de la función).
 
 **B4. `mock-pay` debe poder apagarse.**
-La spec dice "solo en desarrollo". Agrega al inicio de la función: si `ENABLE_MOCK_PAY !== "true"` responde 404, y
-exige el header `x-mock-pay-token` igual a `MOCK_PAY_TOKEN`. Acepta además un `eventId` opcional para probar
-duplicados (sección 9). Debe rechazar cualquier `chargeId` cuyo puesto no tenga `provider = 'mock'`, para que
+La spec dice "solo en desarrollo". La función responde 404 si `ENABLE_MOCK_PAY !== "true"` y exige un JWT válido
+del dueño del puesto. Acepta un `eventId` opcional para probar duplicados (sección 9). Debe rechazar cualquier `chargeId` cuyo puesto no tenga `provider = 'mock'`, para que
 ninguna acción del navegador pueda confirmar un pago real.
 
 **B5. Canales privados de Realtime.**
@@ -240,11 +238,8 @@ verify_jwt = false      # la autenticación es la firma del proveedor
 verify_jwt = false      # la autenticación es x-cron-secret
 
 # orders y mock-pay conservan verify_jwt = true (por defecto)
-# (mock-pay se protege además con ENABLE_MOCK_PAY y MOCK_PAY_TOKEN)
+# public-orders usa verify_jwt = false y solo devuelve customerView para puestos mock públicos
 ```
-
-> `mock-pay` lo llama el simulador con el JWT del comerciante; si prefieres llamarlo sin sesión, ponlo en
-> `verify_jwt = false` y confía solo en `x-mock-pay-token`.
 
 ### 4.3 Aplicar migraciones
 
@@ -286,10 +281,10 @@ Para el hackatón es más rápido:
 
 Crea el usuario en Authentication → Users y copia su `id` (UUID).
 
-**Demo pública sin credenciales del jurado** (criterio de `docs/PLAN_DEMO.md`): crea un usuario dedicado de demo cuyo
-único puesto sea el de demo con `provider = 'mock'`, y deja sus credenciales (ficticias) en `tools/simulator/config.js`
-para que el simulador inicie sesión solo. Riesgo: cualquiera que abra el repo puede crear órdenes en ese puesto.
-Es aceptable porque es un puesto simulado con datos ficticios; desactiva o rota el usuario después de la entrega.
+**Demo pública:** crea un usuario dedicado en Authentication → Users con contraseña privada. El presentador inicia
+sesión en `merchant.html`; el jurado puede abrir `customer.html` sin credenciales. Nunca pongas la contraseña en
+`config.js`. Después de crear el usuario, ejecuta `tools/deploy/link_demo_user.sql` en SQL Editor, sustituyendo el
+correo en sus dos lugares, y copia el `STALL_ID` devuelto a `tools/simulator/config.js`. El puesto usa `provider = 'mock'`.
 
 **Comerciante y puesto de prueba** (SQL Editor o `psql`):
 
@@ -327,6 +322,7 @@ supabase functions deploy orders
 supabase functions deploy webhooks
 supabase functions deploy reconcile
 supabase functions deploy mock-pay
+supabase functions deploy public-orders --no-verify-jwt
 ```
 
 URLs resultantes (las usará la app y el proveedor):
@@ -419,8 +415,8 @@ de compilación. Hoy `tools/simulator/index.html` es solo una pantalla de arranq
 
 - Vistas separadas de **Comerciante** y **Cliente**, con la indicación visible **"Modo demo / sin dinero real"**.
 - El cliente ve número de orden, monto y un QR **claramente simulado**, y nunca la palabra antes de `PAID`.
-- El botón "el cliente paga" llama a `mock-pay` en el servidor. **Ninguna acción del navegador puede marcar un pago como confirmado.**
-- El recorrido se ejecuta desde cero, sin credenciales especiales del jurado (ver la cuenta de demo en 4.5).
+- El botón del comerciante llama a `mock-pay` en el servidor. **Ninguna acción del navegador puede marcar un pago como confirmado.**
+- El presentador usa sus credenciales privadas; el jurado abre la vista del cliente sin iniciar sesión.
 
 ### Opción A (recomendada): estático, sin compilación
 
@@ -430,14 +426,14 @@ No requiere cambiar `vercel.json`. Estructura sugerida dentro de `tools/simulato
 index.html        # elige vista (o redirige)
 merchant.html     # tarjetas de órdenes con palabra privada, teclado manual, efectivo, cancelar
 customer.html     # QR simulado + monto + número; anuncio con palabra solo al pagar
-config.js         # SUPABASE_URL, SUPABASE_ANON_KEY, STALL_ID, credenciales de la cuenta de demo
+config.js         # solo SUPABASE_URL, SUPABASE_ANON_KEY y STALL_ID público
 ```
 
 - Carga `supabase-js` como módulo ESM desde un CDN, por ejemplo
   `import { createClient } from "https://esm.sh/@supabase/supabase-js@2"` **[VERIFICAR versión y URL]**.
 - `config.js` puede versionarse: la **anon key es pública por diseño** y la protege RLS. La `service_role`
   **nunca** va aquí ni en ningún archivo servido por Vercel.
-- Los canales Realtime del cliente y del comerciante deben abrirse con `private: true` (B5).
+- El comerciante usa Realtime privado. El cliente consulta `public-orders` cada 3 segundos sin sesión.
 
 Prueba local sin instalar nada del proyecto:
 
@@ -569,7 +565,6 @@ Variables de apoyo:
 export SUPABASE_URL=https://<PROJECT_REF>.supabase.co
 export ANON=<anon key>
 export STALL_ID=<STALL_ID>
-export MOCK_PAY_TOKEN=<valor del secreto>
 export JWT=$(curl -s "$SUPABASE_URL/auth/v1/token?grant_type=password" \
   -H "apikey: $ANON" -H "Content-Type: application/json" \
   -d '{"email":"<correo>","password":"<contraseña>"}' | jq -r .access_token)
@@ -594,7 +589,7 @@ CHARGE_ID=$(psql "$DATABASE_URL" -Atc \
   "select provider_charge_id from orders where id='$(jq -r .orderId /tmp/order.json)'")
 curl -s -X POST "$SUPABASE_URL/functions/v1/mock-pay" \
   -H "Authorization: Bearer $JWT" -H "apikey: $ANON" \
-  -H "x-mock-pay-token: $MOCK_PAY_TOKEN" -H "Content-Type: application/json" \
+  -H "Content-Type: application/json" \
   -d '{"chargeId":"'$CHARGE_ID'"}'
 ```
 
@@ -609,7 +604,7 @@ Esperado: la orden pasa a `PAID`; el comerciante ve la tarjeta en verde; el clie
 - [ ] **Pago después de cancelar o expirar:** `late_payment = true` y aviso privado.
 - [ ] **Caída del WebSocket** durante la espera: el polling cada 5 s recupera el estado.
 - [ ] **Dos órdenes simultáneas:** palabras distintas y anuncio de la correcta.
-- [ ] **Palabra nunca en el canal del cliente antes del pago** (revisar el tráfico de `stall:{id}:customer`).
+- [ ] **Palabra nunca en `/public-orders` antes del pago** (revisar la respuesta HTTP sin iniciar sesión).
 - [ ] **Efectivo** (`method:"cash"`): queda `PAID_CASH` sin QR ni palabra.
 - [ ] **Sin conexión:** el audífono dice "Sin conexión. Cobra en efectivo." y la venta en efectivo se sincroniza después (outbox).
 - [ ] **Idempotencia:** repetir la misma `idempotencyKey` devuelve la misma orden, no una nueva.
@@ -655,7 +650,7 @@ Checklist del formulario de entrega (domingo 15 de noviembre, 1:00 PM hora CDMX;
 | La orden queda en `PENDING_UNKNOWN` tras pagar | `getStatus` del Mock devuelve `pending` (brecha B2) | Crear `mock_charges` y que `mock-pay` la marque `settled` antes del webhook |
 | `/webhooks/...` responde 401 | Firma o timestamp inválidos, o JWT exigido | Mismo `MOCK_WEBHOOK_SECRET` en ambos lados; reloj correcto (±5 min); `verify_jwt = false` |
 | `422 monto` al crear la orden | Monto bajo el mínimo | Ajusta `MIN_AMOUNT_CENTS` (brecha B1) |
-| El cliente no recibe `order.created` | Canal no privado, topic mal escrito o política de Realtime | `private: true`; topic `stall:<uuid>:customer`; revisa `realtime_own_stall` |
+| El cliente no actualiza la orden | `public-orders` sin desplegar, puesto sin `public_announce`, o polling sin conexión | Despliega `public-orders`, comprueba el `STALL_ID` y revisa la respuesta de la función |
 | `permission denied` / RLS al escribir órdenes | La app intenta escribir directo | Las órdenes solo se escriben desde Edge Functions (`service_role`) |
 | `pick_secret_word` devuelve `null` | Tabla `secret_words` vacía | Cargar el CSV (sección 4.4) |
 | `duplicate key ... orders_active_word` | Pocas palabras para las órdenes activas | Ampliar la lista a ≥ 300 |

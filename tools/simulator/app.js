@@ -3,7 +3,7 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm";
 
 export const cfg = window.COPILOTO_CONFIG ?? {};
-export const configured = Boolean(cfg.SUPABASE_URL && cfg.SUPABASE_ANON_KEY && cfg.STALL_ID && cfg.DEMO_EMAIL);
+export const configured = Boolean(cfg.SUPABASE_URL && cfg.SUPABASE_ANON_KEY && cfg.STALL_ID);
 
 export const supabase = configured
   ? createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY, { auth: { persistSession: true, storageKey: "copiloto-demo" } })
@@ -19,16 +19,14 @@ export const STATE_LABEL = {
 
 export function showConfigNotice(container) {
   container.innerHTML = `<div class="notice error"><strong>Simulador sin configurar.</strong>
-    Falta rellenar <code>tools/simulator/config.js</code> (URL de Supabase, anon key, puesto y cuenta de demo).
+    Falta rellenar <code>tools/simulator/config.js</code> (URL de Supabase, anon key y puesto de demo).
     Ver DEPLOY.md §6.</div>`;
 }
 
 export async function ensureSession() {
   const { data } = await supabase.auth.getSession();
   if (data.session) return data.session;
-  const { data: d, error } = await supabase.auth.signInWithPassword({ email: cfg.DEMO_EMAIL, password: cfg.DEMO_PASSWORD });
-  if (error) throw new Error(`No se pudo iniciar sesión de demo: ${error.message}`);
-  return d.session;
+  throw new Error("Inicia sesión como comerciante.");
 }
 
 async function token() {
@@ -54,8 +52,17 @@ export async function api(path, { method = "GET", body, headers = {} } = {}) {
 
 export const listOrders = (view) => api(`orders?stallId=${encodeURIComponent(cfg.STALL_ID)}&view=${view}`);
 
+export async function listCustomerOrders() {
+  const res = await fetch(`${cfg.SUPABASE_URL}/functions/v1/public-orders?stallId=${encodeURIComponent(cfg.STALL_ID)}`, {
+    headers: { apikey: cfg.SUPABASE_ANON_KEY },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+  return data;
+}
+
 export const mockPay = (orderId, extra = {}) =>
-  api("mock-pay", { method: "POST", body: { orderId, ...extra }, headers: { "x-mock-pay-token": cfg.MOCK_PAY_TOKEN ?? "" } });
+  api("mock-pay", { method: "POST", body: { orderId, ...extra } });
 
 /** Suscripción a un canal privado (B5) + polling cada 5 s como respaldo si cae el WebSocket. */
 export async function subscribe(role, onEvent, onPoll, onStatus) {

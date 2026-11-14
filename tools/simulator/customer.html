@@ -21,9 +21,8 @@
     <span class="pill live" id="live">…</span>
   </div>
   <script type="module">
-    // Esta vista SOLO consume el canal stall:<id>:customer y la vista "customer" de /orders,
-    // que nunca traen la palabra antes de PAID.
-    import { configured, ensureSession, listOrders, mockPay, subscribe, money, unlockAudio, earcon, say,
+    // Esta vista pública solo consume una respuesta saneada; no usa la sesión del comerciante.
+    import { configured, listCustomerOrders, money, unlockAudio, earcon, say,
              escapeHtml, showConfigNotice } from "./app.js";
 
     if (new URLSearchParams(location.search).has("embed")) document.querySelector(".demo-banner").remove();
@@ -48,6 +47,7 @@
     }
 
     function render() {
+      if (!configured) return;
       const o = current();
       $("root").classList.toggle("paid", o?.state === "PAID");
       if (!o) { $("screen").innerHTML = `<p class="num">Pollería Doña Carmen</p><p class="big" style="font-size:2rem">Esperando cobro…</p>`; return; }
@@ -60,9 +60,7 @@
       $("screen").innerHTML = `<p class="num">Orden ${o.number}</p><p class="big">${money(o.amountCents)}</p>
         <div class="qr" aria-label="QR de pago simulado, no válido">${o.qrPayload ? qrSvg(o.qrPayload) : ""}<div class="stamp"><span>SIMULADO</span></div></div>
         <p class="countdown">Expira en ${left}s</p>
-        <button class="primary" id="pay" style="margin-top:8px">Pagar desde mi banco (simulado)</button>
-        <p class="countdown" style="font-size:.85rem">El servidor confirma el pago; esta pantalla no puede marcarlo como pagado.</p>`;
-      $("pay").onclick = async (e) => { e.target.disabled = true; try { await mockPay(o.orderId); } catch (err) { e.target.textContent = err.message; } };
+        <p class="countdown" style="font-size:.85rem">Pago de prueba: el comerciante lo activa desde su vista privada. El servidor confirma el estado.</p>`;
     }
 
     function upsert(p, live) {
@@ -78,13 +76,25 @@
 
     async function boot() {
       if (!configured) { showConfigNotice($("screen")); return; }
-      try {
-        await ensureSession();
-        await subscribe("customer",
-          (_event, p) => { upsert(p, true); render(); },
-          async () => { const r = await listOrders("customer"); r.orders.forEach((o) => upsert(o, false)); firstLoad = false; render(); },
-          (ok, status) => { $("live").classList.toggle("on", ok); $("live").textContent = ok ? "En vivo" : `Polling (${status})`; });
-      } catch (err) { $("screen").innerHTML = `<div class="notice error">${escapeHtml(err.message)}</div>`; }
+      let polling = false;
+      const poll = async () => {
+        if (polling) return;
+        polling = true;
+        try {
+          const r = await listCustomerOrders();
+          r.orders.forEach((o) => upsert(o, !firstLoad && orders.get(o.orderId)?.state !== o.state));
+          firstLoad = false;
+          $("live").classList.add("on");
+          $("live").textContent = "Actualizado";
+          render();
+        } catch (err) {
+          $("live").classList.remove("on");
+          $("live").textContent = "Sin conexión";
+          $("screen").innerHTML = `<div class="notice error">${escapeHtml(err.message)}</div>`;
+        } finally { polling = false; }
+      };
+      await poll();
+      setInterval(poll, 3000);
     }
     setInterval(render, 1000);
     boot();

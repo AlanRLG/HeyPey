@@ -430,7 +430,10 @@ enabled = true
 verify_jwt = true
 
 [functions.mock-pay]
-verify_jwt = true       # además: ENABLE_MOCK_PAY y x-mock-pay-token
+verify_jwt = true       # además: ENABLE_MOCK_PAY, usuario dueño y provider = mock
+
+[functions.public-orders]
+verify_jwt = false      # solo vista saneada para puestos demo públicos
 
 [functions.webhooks]
 verify_jwt = false      # la autenticación es la firma del proveedor

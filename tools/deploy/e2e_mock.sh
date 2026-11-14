@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Verificación de punta a punta con MockProvider (DEPLOY.md §9). Sin dinero real.
-#   SUPABASE_URL=... ANON=... STALL_ID=... MOCK_PAY_TOKEN=... DEMO_EMAIL=... DEMO_PASSWORD=... tools/deploy/e2e_mock.sh
+#   SUPABASE_URL=... ANON=... STALL_ID=... DEMO_EMAIL=... DEMO_PASSWORD=... tools/deploy/e2e_mock.sh
 set -uo pipefail
-: "${SUPABASE_URL:?}" "${ANON:?}" "${STALL_ID:?}" "${MOCK_PAY_TOKEN:?}" "${DEMO_EMAIL:?}" "${DEMO_PASSWORD:?}"
+: "${SUPABASE_URL:?}" "${ANON:?}" "${STALL_ID:?}" "${DEMO_EMAIL:?}" "${DEMO_PASSWORD:?}"
 FN="$SUPABASE_URL/functions/v1"
 pass=0; fail=0
 ok()   { echo "  ✔ $1"; pass=$((pass+1)); }
@@ -19,9 +19,9 @@ create() { # amountCents method [idemKey]
     '{stallId:$s, amountCents:$a, amountSource:"manual", method:$m, items:[], idempotencyKey:$k}')"; }
 pay() { # orderId [extraJson]
   local x="${2:-}"; [[ -n "$x" ]] || x="{}"
-  curl -s "${A[@]}" -H "x-mock-pay-token: $MOCK_PAY_TOKEN" -X POST "$FN/mock-pay" -d "$(jq -n --arg o "$1" --argjson x "$x" '{orderId:$o} + $x')"; }
+  curl -s "${A[@]}" -X POST "$FN/mock-pay" -d "$(jq -n --arg o "$1" --argjson x "$x" '{orderId:$o} + $x')"; }
 state() { curl -s "${A[@]}" "$FN/orders?stallId=$STALL_ID&view=merchant" | jq -r --arg o "$1" '.orders[] | select(.orderId==$o) | .state'; }
-cust()  { curl -s "${A[@]}" "$FN/orders?stallId=$STALL_ID&view=customer" | jq -c --arg o "$1" '.orders[] | select(.orderId==$o)'; }
+cust()  { curl -s -H "apikey: $ANON" "$FN/public-orders?stallId=$STALL_ID" | jq -c --arg o "$1" '.orders[] | select(.orderId==$o)'; }
 
 echo "1. Cobro → pago simulado → PAID"
 O1=$(create 24000 codi); ID1=$(jq -r .orderId <<<"$O1")
@@ -68,7 +68,7 @@ check "422" "$(curl -s -o /dev/null -w '%{http_code}' "${A[@]}" -X POST "$FN/ord
 
 echo "9. Seguridad de acceso"
 check "orders sin JWT → 401" "$(curl -s -o /dev/null -w '%{http_code}' -H "apikey: $ANON" "$FN/orders?stallId=$STALL_ID")" "401"
-check "mock-pay sin token → 403" "$(curl -s -o /dev/null -w '%{http_code}' "${A[@]}" -X POST "$FN/mock-pay" -d "{\"orderId\":\"$ID1\"}")" "403"
+check "mock-pay sin JWT → 401" "$(curl -s -o /dev/null -w '%{http_code}' -H "apikey: $ANON" -X POST "$FN/mock-pay" -d "{\"orderId\":\"$ID1\"}")" "401"
 check "anon no lee órdenes (RLS)" "$(curl -s -H "apikey: $ANON" "$SUPABASE_URL/rest/v1/orders?select=id" | jq length)" "0"
 check "reconcile sin secreto → 401" "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$FN/reconcile")" "401"
 
