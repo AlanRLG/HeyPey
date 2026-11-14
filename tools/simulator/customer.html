@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="es-MX">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#123a46" />
+  <title>Copiloto Zero-UI · Cliente</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
+</head>
+<body>
+  <div class="demo-banner" role="status">MODO DEMO · SIN DINERO REAL · pantalla PÚBLICA del cliente</div>
+  <div class="customer" id="root">
+    <div class="screen" id="screen" aria-live="assertive">
+      <p class="empty">Conectando…</p>
+    </div>
+  </div>
+  <div style="position:fixed;bottom:10px;right:10px;display:flex;gap:6px">
+    <button class="pill" id="sound">🔈 Activar sonido</button>
+    <span class="pill live" id="live">…</span>
+  </div>
+  <script type="module">
+    // Esta vista SOLO consume el canal stall:<id>:customer y la vista "customer" de /orders,
+    // que nunca traen la palabra antes de PAID.
+    import { configured, ensureSession, listOrders, mockPay, subscribe, money, unlockAudio, earcon, say,
+             escapeHtml, showConfigNotice } from "./app.js";
+
+    if (new URLSearchParams(location.search).has("embed")) document.querySelector(".demo-banner").remove();
+    const $ = (id) => document.getElementById(id);
+    const orders = new Map();
+    const announced = new Set();
+    let soundOn = false, firstLoad = true, focusId = null, paidShownAt = 0;
+
+    $("sound").onclick = () => { unlockAudio(); soundOn = true; $("sound").textContent = "🔊 Sonido activo"; say("Sonido activado"); };
+
+    function qrSvg(text) {
+      const qr = qrcode(0, "M"); qr.addData(text); qr.make();
+      return qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+    }
+
+    function current() {
+      // Muestra el anuncio de pago unos segundos; si no, la orden pendiente más reciente.
+      const f = focusId && orders.get(focusId);
+      if (f && f.state === "PAID" && Date.now() - paidShownAt < 8000) return f;
+      return [...orders.values()].filter((o) => o.state === "AWAITING_PAYMENT")
+        .sort((a, b) => b.number - a.number)[0] ?? null;
+    }
+
+    function render() {
+      const o = current();
+      $("root").classList.toggle("paid", o?.state === "PAID");
+      if (!o) { $("screen").innerHTML = `<p class="num">Pollería Doña Carmen</p><p class="big" style="font-size:2rem">Esperando cobro…</p>`; return; }
+      if (o.state === "PAID") {
+        $("screen").innerHTML = `<p class="num">Orden ${o.number}</p><p class="paid-word">${escapeHtml(o.secretWord)}</p>
+          <p class="big" style="font-size:2rem">Pagada ✓</p><p class="countdown">Dile esta palabra al comerciante para recoger tu pedido.</p>`;
+        return;
+      }
+      const left = Math.max(0, Math.round((new Date(o.expiresAt) - Date.now()) / 1000));
+      $("screen").innerHTML = `<p class="num">Orden ${o.number}</p><p class="big">${money(o.amountCents)}</p>
+        <div class="qr" aria-label="QR de pago simulado, no válido">${o.qrPayload ? qrSvg(o.qrPayload) : ""}<div class="stamp"><span>SIMULADO</span></div></div>
+        <p class="countdown">Expira en ${left}s</p>
+        <button class="primary" id="pay" style="margin-top:8px">Pagar desde mi banco (simulado)</button>
+        <p class="countdown" style="font-size:.85rem">El servidor confirma el pago; esta pantalla no puede marcarlo como pagado.</p>`;
+      $("pay").onclick = async (e) => { e.target.disabled = true; try { await mockPay(o.orderId); } catch (err) { e.target.textContent = err.message; } };
+    }
+
+    function upsert(p, live) {
+      orders.set(p.orderId, { ...(orders.get(p.orderId) ?? {}), ...p });
+      if (p.state === "PAID" && !announced.has(p.orderId)) {
+        announced.add(p.orderId);
+        if (!firstLoad || live) {
+          focusId = p.orderId; paidShownAt = Date.now();
+          if (soundOn) { earcon("paid"); setTimeout(() => say(`Orden ${p.number}, ${p.secretWord}, pagada`), 350); }
+        }
+      }
+    }
+
+    async function boot() {
+      if (!configured) { showConfigNotice($("screen")); return; }
+      try {
+        await ensureSession();
+        await subscribe("customer",
+          (_event, p) => { upsert(p, true); render(); },
+          async () => { const r = await listOrders("customer"); r.orders.forEach((o) => upsert(o, false)); firstLoad = false; render(); },
+          (ok, status) => { $("live").classList.toggle("on", ok); $("live").textContent = ok ? "En vivo" : `Polling (${status})`; });
+      } catch (err) { $("screen").innerHTML = `<div class="notice error">${escapeHtml(err.message)}</div>`; }
+    }
+    setInterval(render, 1000);
+    boot();
+  </script>
+</body>
+</html>
