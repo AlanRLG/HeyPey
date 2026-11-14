@@ -4,6 +4,9 @@
 #
 #   PROJECT_REF=<ref> DB_PASSWORD='<contraseña de la BD>' tools/deploy/deploy_cloud.sh
 #
+# RESUME_FROM=cron salta enlace, migraciones, secretos y funciones (ya desplegados) y retoma
+# desde la cuenta demo, pg_cron, config.js y la verificación. Todos los pasos son repetibles.
+#
 # Genera backend/.env.secrets (no versionado) si no existe, y reescribe tools/simulator/config.js
 # solo con valores públicos (URL, anon key, puesto, cuenta demo ficticia, token de mock-pay).
 set -euo pipefail
@@ -14,6 +17,7 @@ URL="https://$PROJECT_REF.supabase.co"
 DEMO_EMAIL="${DEMO_EMAIL:-demo@copiloto-zeroui.invalid}"
 cd "$ROOT/backend"
 
+if [[ "${RESUME_FROM:-}" != "cron" ]]; then
 echo "==> Enlazando proyecto"
 supabase link "$PROJECT_REF"
 
@@ -46,10 +50,14 @@ for f in orders webhooks reconcile mock-pay; do
   supabase functions deploy "$f" --remote --use-api --yes
 done
 
+fi
+[[ -f .env.secrets ]] || { echo "Falta backend/.env.secrets" >&2; exit 1; }
+set -a; source .env.secrets; set +a
+
 echo "==> Claves del proyecto"
-KEYS=$(supabase projects api-keys --remote --reveal -o json)
-ANON=$(jq -r '[.[] | select(.name=="anon")][0].api_key' <<<"$KEYS")
-SERVICE=$(jq -r '[.[] | select(.name=="service_role")][0].api_key' <<<"$KEYS")
+KEYS=$(supabase projects api-keys --remote --reveal -o json 2>/dev/null)
+ANON=$(jq -r '[.. | objects | select(.name=="anon")][0].api_key' <<<"$KEYS")
+SERVICE=$(jq -r '[.. | objects | select(.name=="service_role")][0].api_key' <<<"$KEYS")
 
 echo "==> Cuenta y puesto de demo"
 BOOT=$(SUPABASE_URL="$URL" SERVICE_ROLE_KEY="$SERVICE" DEMO_EMAIL="$DEMO_EMAIL" DEMO_PASSWORD="$DEMO_PASSWORD" \
@@ -57,7 +65,12 @@ BOOT=$(SUPABASE_URL="$URL" SERVICE_ROLE_KEY="$SERVICE" DEMO_EMAIL="$DEMO_EMAIL" 
 STALL_ID=$(sed -n 's/^STALL_ID=//p' <<<"$BOOT")
 
 echo "==> pg_cron (reconcile cada minuto)"
-DBURL="postgresql://postgres:${DB_PASSWORD}@db.${PROJECT_REF}.supabase.co:5432/postgres"
+# El host directo db.<ref>.supabase.co solo tiene IPv6; se usa el pooler (IPv4, modo sesión)
+# que `supabase link` guarda en supabase/.temp/pooler-url.
+POOLER=$(cat supabase/.temp/pooler-url 2>/dev/null || true)
+[[ -n "$POOLER" ]] || POOLER="postgresql://postgres.${PROJECT_REF}@aws-0-us-west-2.pooler.supabase.com:5432/postgres"
+export PGPASSWORD="$DB_PASSWORD"
+DBURL=$(sed -E 's#://([^:@/]+)(:[^@]*)?@#://\1@#' <<<"$POOLER")
 "$PSQL" "$DBURL" -v ON_ERROR_STOP=1 -v cron_secret="$CRON_SECRET" -v fn_url="$URL/functions/v1/reconcile" <<'SQL'
 create extension if not exists pg_cron;
 create extension if not exists pg_net;
