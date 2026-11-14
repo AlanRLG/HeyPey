@@ -6,6 +6,8 @@ Repositorio base para el hack de Cursor. El producto propuesto permite a un come
 
 **Solo estructura inicial.** Todavía no hay cobros, reconocimiento de voz, backend ni aplicación Android. La página de Vercel es una pantalla de arranque para comprobar que el despliegue funciona; no representa una demo funcional.
 
+Página base publicada: [copiloto-zeroui.vercel.app](https://copiloto-zeroui.vercel.app/). Los cambios en `main` se despliegan automáticamente mediante la integración de GitHub con Vercel.
+
 La especificación de referencia es `Modulo2_Copiloto_Acustico_ZeroUI_v3.pdf`, entregada por el autor del proyecto. No se incluye el PDF en el repositorio para evitar publicar un documento de trabajo sin necesidad.
 
 ## Estructura
@@ -24,12 +26,9 @@ docs/                   Alcance y plan de demo
 
 Construir primero el flujo sin voz y con `MockProvider`: crear orden, mostrar QR de prueba, simular el pago, verificar el evento en el servidor y anunciar el número de orden con la palabra correcta. Después se integran Android, audio y proveedor real. Ver [plan de demo](docs/PLAN_DEMO.md).
 
-## Publicar la base en Vercel
+## Configuración de Vercel
 
-1. Importa este repositorio en Vercel.
-2. Deja la raíz del proyecto en `/` y la rama de producción en `main`.
-3. `vercel.json` fija el preset **Other** y el directorio de salida `tools/simulator`. No se necesita instalar dependencias ni configurar variables de entorno para la página inicial.
-4. Despliega. La URL debe mostrar **“Base lista para construir”**.
+El proyecto ya está enlazado a este repositorio. Usa la raíz `/` y `main` como rama de producción. `vercel.json` fija el preset **Other** y el directorio de salida `tools/simulator`. La página inicial no necesita dependencias ni variables de entorno.
 
 Cuando exista el simulador, reemplaza `tools/simulator/index.html` o cambia `outputDirectory` a la carpeta de compilación correspondiente. Nunca expongas claves `service_role` ni secretos del proveedor en archivos servidos por Vercel.
 
