@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+.vercel/
+node_modules/
+dist/
+build/
+.gradle/
+android/.gradle/
+android/local.properties
+*.keystore
+*.jks
+*.apk
+*.aab
+.DS_Store
+Thumbs.db
