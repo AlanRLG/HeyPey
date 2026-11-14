@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="es-MX">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#123a46" />
+  <title>Copiloto Zero-UI · Comerciante</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="config.js"></script>
+</head>
+<body>
+  <div class="demo-banner" role="status">MODO DEMO · SIN DINERO REAL · vista PRIVADA del comerciante</div>
+  <header class="top">
+    <h1>Comerciante · <span id="stallName">Puesto demo</span></h1>
+    <nav>
+      <span class="pill live" id="live">Conectando…</span>
+      <a class="pill" href="index.html" target="_top">Inicio</a>
+    </nav>
+  </header>
+  <main>
+    <div id="notice"></div>
+    <div class="grid">
+      <section class="card" aria-labelledby="newTitle">
+        <h2 id="newTitle">Nuevo cobro</h2>
+        <div class="amount" id="amount" aria-live="polite">$0.00</div>
+        <div class="keypad" id="keypad">
+          <button>1</button><button>2</button><button>3</button>
+          <button>4</button><button>5</button><button>6</button>
+          <button>7</button><button>8</button><button>9</button>
+          <button data-k="00">00</button><button>0</button><button data-k="del" aria-label="Borrar">⌫</button>
+        </div>
+        <div class="seg" role="group" aria-label="Método de pago">
+          <button id="mCodi" aria-pressed="true">CoDi (simulado)</button>
+          <button id="mCash" aria-pressed="false">Efectivo</button>
+        </div>
+        <button class="primary" id="create" style="width:100%">Cobrar</button>
+        <p class="meta" id="createMsg" role="status" style="min-height:1.4em;color:var(--ink-2);font-size:.88rem"></p>
+        <h2 style="margin-top:16px">Registro de eventos</h2>
+        <pre class="log" id="log" aria-live="polite"></pre>
+      </section>
+      <section aria-labelledby="ordersTitle">
+        <h2 id="ordersTitle">Órdenes de hoy <span class="meta" style="font-weight:400;color:var(--ink-2)">— la palabra solo se ve aquí</span></h2>
+        <div class="orders" id="orders"><div class="empty card">Sin órdenes todavía.</div></div>
+      </section>
+    </div>
+  </main>
+  <script type="module">
+    import { configured, cfg, supabase, ensureSession, api, listOrders, mockPay, subscribe, money, STATE_LABEL,
+             uuid, escapeHtml, showConfigNotice } from "./app.js";
+
+    if (new URLSearchParams(location.search).has("embed")) document.querySelector(".demo-banner").remove();
+    const $ = (id) => document.getElementById(id);
+    let cents = 0, method = "codi";
+    const orders = new Map();
+
+    const logLine = (msg) => {
+      const t = new Date().toLocaleTimeString("es-MX");
+      $("log").textContent = `[${t}] ${msg}\n` + $("log").textContent.slice(0, 4000);
+    };
+    const renderAmount = () => { $("amount").textContent = money(cents); };
+
+    $("keypad").addEventListener("click", (e) => {
+      const b = e.target.closest("button"); if (!b) return;
+      const k = b.dataset.k ?? b.textContent;
+      if (k === "del") cents = Math.floor(cents / 10);
+      else if (String(cents).length < 7) cents = Number(String(cents) + k);
+      renderAmount();
+    });
+    const setMethod = (m) => { method = m; $("mCodi").setAttribute("aria-pressed", m === "codi"); $("mCash").setAttribute("aria-pressed", m === "cash"); };
+    $("mCodi").onclick = () => setMethod("codi");
+    $("mCash").onclick = () => setMethod("cash");
+
+    function render() {
+      const list = [...orders.values()].sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
+      if (!list.length) { $("orders").innerHTML = `<div class="empty card">Sin órdenes todavía.</div>`; return; }
+      $("orders").innerHTML = list.map((o) => {
+        const active = ["AWAITING_PAYMENT", "PENDING_UNKNOWN", "CREATING"].includes(o.state);
+        const left = o.expiresAt && active ? Math.max(0, Math.round((new Date(o.expiresAt) - Date.now()) / 1000)) : null;
+        return `<article class="order ${o.state}" data-id="${o.orderId}">
+          <div class="head">
+            <span class="num">Orden ${o.number}</span>
+            <span>${o.latePayment ? '<span class="badge late">Pago tardío</span> ' : ""}<span class="badge ${o.state}">${STATE_LABEL[o.state] ?? o.state}</span></span>
+          </div>
+          ${o.secretWord ? `<div class="word">🔒 ${escapeHtml(o.secretWord)}</div>` : ""}
+          <div class="meta">${money(o.amountCents)} · ${o.method === "cash" ? "Efectivo" : "CoDi simulado"}${left !== null ? ` · expira en ${left}s` : ""}</div>
+          ${active ? `<div class="actions">
+              <button class="primary" data-act="pay">El cliente paga (simulado)</button>
+              <button class="danger" data-act="cancel">Cancelar</button>
+            </div>
+            <details class="tests"><summary>Pruebas de seguridad</summary><div class="actions">
+              <button data-act="amount">Evento con monto distinto</button>
+              <button data-act="badsig">Firma inválida</button>
+            </div></details>` : ""}
+          ${o.state === "PAID" ? `<div class="actions"><button data-act="dup">Reenviar el mismo evento (duplicado)</button></div>` : ""}
+          ${["CANCELLED", "EXPIRED"].includes(o.state) && !o.latePayment && o.method === "codi" ? `<div class="actions"><button data-act="late">Pago después de cancelar/expirar</button></div>` : ""}
+        </article>`;
+      }).join("");
+    }
+
+    const lastEvent = new Map(); // orderId -> eventId (para la prueba de duplicado)
+    $("orders").addEventListener("click", async (e) => {
+      const b = e.target.closest("button[data-act]"); if (!b) return;
+      const id = b.closest(".order").dataset.id, o = orders.get(id);
+      b.disabled = true;
+      try {
+        if (b.dataset.act === "cancel") {
+          const r = await api(`orders/${id}/cancel`, { method: "POST" });
+          orders.set(id, { ...o, ...r }); logLine(`Orden ${o.number} cancelada`);
+        } else {
+          const extra = b.dataset.act === "amount" ? { amountCents: o.amountCents + 100 }
+            : b.dataset.act === "badsig" ? { badSignature: true }
+            : b.dataset.act === "dup" ? { eventId: lastEvent.get(id) ?? undefined } : {};
+          const r = await mockPay(id, extra);
+          if (b.dataset.act === "pay" || b.dataset.act === "late") lastEvent.set(id, r.eventId);
+          logLine(`mock-pay orden ${o.number} (${b.dataset.act}) → webhook ${r.webhookStatus} ${JSON.stringify(r.webhook)}`);
+        }
+      } catch (err) { logLine(`Error: ${err.message}`); }
+      b.disabled = false; render();
+    });
+
+    $("create").onclick = async () => {
+      if (!cents) { $("createMsg").textContent = "Escribe un monto."; return; }
+      $("create").disabled = true; $("createMsg").textContent = "Creando…";
+      try {
+        const o = await api("orders", { method: "POST", body: {
+          stallId: cfg.STALL_ID, amountCents: cents, amountSource: "manual", method, items: [], idempotencyKey: uuid() } });
+        orders.set(o.orderId, o);
+        $("createMsg").textContent = o.method === "cash" ? `Orden ${o.number} en efectivo registrada.` : `Orden ${o.number}: palabra “${o.secretWord}”. Dile al cliente que espere el anuncio.`;
+        logLine(`Orden ${o.number} creada (${money(o.amountCents)}, ${o.method})`);
+        cents = 0; renderAmount(); render();
+      } catch (err) {
+        $("createMsg").textContent = err.status === 422 ? `Monto fuera de rango (mínimo ${money(err.data.minAmountCents ?? 0)}).` : `Error: ${err.message}`;
+      }
+      $("create").disabled = false;
+    };
+
+    async function boot() {
+      if (!configured) { showConfigNotice($("notice")); $("create").disabled = true; return; }
+      try {
+        await ensureSession();
+        const { data: stall } = await supabase.from("stalls").select("name").eq("id", cfg.STALL_ID).maybeSingle();
+        if (stall) $("stallName").textContent = stall.name;
+        await subscribe("merchant",
+          (event, p) => {
+            const prev = orders.get(p.orderId) ?? {};
+            orders.set(p.orderId, { ...prev, ...p });
+            logLine(`Realtime ${event}: orden ${p.number} → ${p.state}${p.latePayment ? " (pago tardío)" : ""}`);
+            render();
+          },
+          async () => { const r = await listOrders("merchant"); r.orders.forEach((o) => orders.set(o.orderId, o)); render(); },
+          (ok, status) => { $("live").classList.toggle("on", ok); $("live").textContent = ok ? "En vivo" : `Polling (${status})`; });
+      } catch (err) { $("notice").innerHTML = `<div class="notice error">${escapeHtml(err.message)}</div>`; }
+    }
+    setInterval(render, 1000);
+    renderAmount(); boot();
+  </script>
+</body>
+</html>

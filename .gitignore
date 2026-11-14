@@ -14,3 +14,4 @@ android/local.properties
 *.aab
 .DS_Store
 Thumbs.db
+!.env.secrets.example
