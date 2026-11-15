@@ -29,6 +29,7 @@ export type SpeechHost = {
 }
 
 export const LISTEN_LIMIT_MS = 12_000
+export const WAKE_RESTART_MS = 350
 
 const ERRORS: Record<string, string> = {
   'not-allowed': 'El navegador no permitió el micrófono. Escribe el importe.',
@@ -137,4 +138,104 @@ export function listenOnce(
       finish()
     },
   }
+}
+
+export function wakeAmountFromTranscript(value: string): string | null {
+  const text = value.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
+    .replace(/(\d)[,](\d)/g, '$1.$2')
+    .replace(/[^a-z0-9.]+/g, ' ').replace(/\s+/g, ' ').trim()
+  const match = /^(?:hey\s+(?:pey|pay|pei|pe)|heypey)(?:\s+(.*))?$/.exec(text)
+  return match ? (match[1] ?? '') : null
+}
+
+// Escucha voluntaria en la pestaña activa. Reconoce la palabra y solo entrega
+// el importe; nunca crea una orden ni guarda la transcripción.
+export function armHeyPey(
+  host: SpeechHost,
+  options: {
+    local: boolean
+    onWake: () => void
+    onAmount: (transcript: string) => boolean
+    onError: (message: string) => void
+    onEnd: () => void
+  },
+): { cancel: () => void } {
+  const Ctor = constructorOf(host)
+  if (!Ctor) {
+    options.onError('Este navegador no admite HeyPEY. Escribe el importe.')
+    options.onEnd()
+    return { cancel: () => {} }
+  }
+  const recognition = new Ctor()
+  recognition.lang = 'es-MX'
+  recognition.continuous = true
+  recognition.interimResults = false
+  recognition.maxAlternatives = 1
+  if (options.local) recognition.processLocally = true
+
+  let active = true
+  let woke = false
+  let restartTimer: ReturnType<typeof setTimeout> | undefined
+  let amountTimer: ReturnType<typeof setTimeout> | undefined
+  const delivered = new Set<number>()
+  const finish = () => {
+    if (!active) return
+    active = false
+    if (restartTimer !== undefined) clearTimeout(restartTimer)
+    if (amountTimer !== undefined) clearTimeout(amountTimer)
+    try { recognition.abort() } catch { /* ya terminó */ }
+    options.onEnd()
+  }
+  const acceptAmount = (text: string) => {
+    if (!active || !text) return
+    if (options.onAmount(text)) finish()
+  }
+  const start = () => {
+    if (!active) return
+    delivered.clear()
+    try { recognition.start() } catch {
+      options.onError('El navegador detuvo HeyPEY. Actívalo otra vez o escribe el importe.')
+      finish()
+    }
+  }
+  recognition.onresult = (event) => {
+    if (!active) return
+    for (let i = 0; i < event.results.length; i += 1) {
+      if (!active) break
+      const result = event.results[i]
+      if (!result?.isFinal || delivered.has(i)) continue
+      delivered.add(i)
+      const text = result[0]?.transcript?.trim() ?? ''
+      if (!text) continue
+      if (!woke) {
+        const amount = wakeAmountFromTranscript(text)
+        if (amount === null) continue
+        woke = true
+        options.onWake()
+        amountTimer = setTimeout(() => {
+          options.onError('HeyPEY escuchó la activación, pero no el importe. Vuelve a activarlo o escríbelo.')
+          finish()
+        }, LISTEN_LIMIT_MS)
+        acceptAmount(amount)
+      } else {
+        const repeatedWake = wakeAmountFromTranscript(text)
+        acceptAmount(repeatedWake ?? text)
+      }
+    }
+  }
+  recognition.onerror = (event) => {
+    if (!active || event.error === 'aborted' || event.error === 'no-speech') return
+    options.onError(ERRORS[event.error ?? ''] ?? 'HeyPEY no pudo escuchar. Actívalo otra vez o escribe el importe.')
+    finish()
+  }
+  recognition.onend = () => {
+    if (!active) return
+    if (restartTimer !== undefined) clearTimeout(restartTimer)
+    restartTimer = setTimeout(() => {
+      restartTimer = undefined
+      start()
+    }, WAKE_RESTART_MS)
+  }
+  start()
+  return { cancel: finish }
 }

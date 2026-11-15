@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { mock, test } from 'node:test'
-import { detectSpeechMode, finalTranscriptFromEvent, LISTEN_LIMIT_MS, listenOnce } from './src/lib/speech-capture.ts'
+import { armHeyPey, detectSpeechMode, finalTranscriptFromEvent, LISTEN_LIMIT_MS, listenOnce, WAKE_RESTART_MS, wakeAmountFromTranscript } from './src/lib/speech-capture.ts'
 
 test('un resultado parcial no entrega transcripción', () => {
   assert.equal(finalTranscriptFromEvent({
@@ -116,6 +116,96 @@ test('un reconocimiento que no termina vuelve al teclado e ignora un resultado t
     assert.equal(instance.aborted, true)
     instance.onresult?.({ results: { 0: { isFinal: true, 0: { transcript: 'Cóbrale cien' } }, length: 1 } })
     assert.deepEqual(finals, [])
+  } finally {
+    mock.timers.reset()
+  }
+})
+
+test('HeyPEY solo acepta la activación al inicio y entrega el monto una vez', () => {
+  assert.equal(wakeAmountFromTranscript('hola hey pey'), null)
+  assert.equal(wakeAmountFromTranscript('HeyPEY, cóbrale 240.50'), 'cobrale 240.50')
+  assert.equal(wakeAmountFromTranscript('Hey pay'), '')
+  let instance
+  class Fake {
+    constructor() { instance = this; this.results = [] }
+    start() { this.started = (this.started ?? 0) + 1 }
+    abort() { this.aborted = true }
+    emit(transcript) {
+      this.results.push({ isFinal: true, 0: { transcript } })
+      this.onresult?.({ results: this.results })
+    }
+  }
+  const amounts = []
+  let wakes = 0
+  let ended = 0
+  armHeyPey({ SpeechRecognition: Fake }, {
+    local: true,
+    onWake: () => { wakes += 1 },
+    onAmount: (value) => { amounts.push(value); return true },
+    onError: () => { throw new Error('No debía fallar') },
+    onEnd: () => { ended += 1 },
+  })
+  assert.equal(instance.continuous, true)
+  assert.equal(instance.processLocally, true)
+  instance.emit('un centavo')
+  assert.equal(wakes, 0)
+  instance.emit('Hey pay')
+  assert.equal(wakes, 1)
+  instance.emit('un centavo')
+  instance.onresult?.({ results: instance.results })
+  assert.deepEqual(amounts, ['un centavo'])
+  assert.equal(ended, 1)
+  assert.equal(instance.aborted, true)
+})
+
+test('HeyPEY y el importe pueden llegar en la misma frase; cancelar ignora resultados tardíos', () => {
+  let instance
+  class Fake {
+    constructor() { instance = this }
+    start() {}
+    abort() { this.aborted = true }
+  }
+  const amounts = []
+  const handle = armHeyPey({ SpeechRecognition: Fake }, {
+    local: false,
+    onWake: () => {},
+    onAmount: (value) => { amounts.push(value); return false },
+    onError: () => { throw new Error('No debía fallar') },
+    onEnd: () => {},
+  })
+  instance.onresult?.({ results: [{ isFinal: true, 0: { transcript: 'HeyPEY cóbrale 240 con 50 centavos' } }] })
+  assert.deepEqual(amounts, ['cobrale 240 con 50 centavos'])
+  handle.cancel()
+  instance.onresult?.({ results: [{ isFinal: true, 0: { transcript: 'cóbrale mil' } }] })
+  assert.deepEqual(amounts, ['cobrale 240 con 50 centavos'])
+})
+
+test('HeyPEY reanuda la escucha tras silencio y se apaga si falta el importe', () => {
+  mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    let instance
+    class Fake {
+      constructor() { instance = this }
+      start() { this.starts = (this.starts ?? 0) + 1 }
+      abort() { this.aborted = true }
+    }
+    const errors = []
+    let ended = 0
+    armHeyPey({ SpeechRecognition: Fake }, {
+      local: false,
+      onWake: () => {},
+      onAmount: () => false,
+      onError: value => errors.push(value),
+      onEnd: () => { ended += 1 },
+    })
+    instance.onend?.()
+    mock.timers.tick(WAKE_RESTART_MS)
+    assert.equal(instance.starts, 2)
+    instance.onresult?.({ results: [{ isFinal: true, 0: { transcript: 'HeyPEY' } }] })
+    mock.timers.tick(LISTEN_LIMIT_MS)
+    assert.match(errors[0], /no el importe/)
+    assert.equal(ended, 1)
+    assert.equal(instance.aborted, true)
   } finally {
     mock.timers.reset()
   }

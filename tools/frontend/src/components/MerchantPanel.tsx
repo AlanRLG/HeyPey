@@ -16,7 +16,7 @@ import {
   type Order, type Provider,
 } from '@/lib/api'
 import { centsToField } from '@/lib/money'
-import { detectSpeechMode, listenOnce, type SpeechHost, type SpeechMode } from '@/lib/speech-capture'
+import { armHeyPey, detectSpeechMode, listenOnce, type SpeechHost, type SpeechMode } from '@/lib/speech-capture'
 import { parseSpokenAmount } from '@/lib/spoken-amount'
 
 type Props = {
@@ -51,6 +51,8 @@ export function MerchantPanel({ provider, onProviderChange }: Props) {
   const [speechMode, setSpeechMode] = useState<SpeechMode | 'checking'>('checking')
   const [listening, setListening] = useState(false)
   const [consentOpen, setConsentOpen] = useState(false)
+  const [consentTarget, setConsentTarget] = useState<'dictate' | 'wake'>('dictate')
+  const [wakeEnabled, setWakeEnabled] = useState(false)
   const [voiceNote, setVoiceNote] = useState('')
   const sessionUserRef = useRef<string | null>(null)
   const methodRef = useRef(method)
@@ -58,6 +60,8 @@ export function MerchantPanel({ provider, onProviderChange }: Props) {
   const listeningRef = useRef(false)
   const consentRef = useRef(false)
   const listenRef = useRef<{ cancel: () => void } | null>(null)
+  const wakeRef = useRef<{ cancel: () => void } | null>(null)
+  const wakeEnabledRef = useRef(false)
   const editedDuringListen = useRef(false)
 
   useEffect(() => {
@@ -76,7 +80,11 @@ export function MerchantPanel({ provider, onProviderChange }: Props) {
           consentRef.current = false
           listenRef.current?.cancel()
           listenRef.current = null
+          wakeEnabledRef.current = false
+          wakeRef.current?.cancel()
+          wakeRef.current = null
           setListening(false)
+          setWakeEnabled(false)
           setConsentOpen(false)
           setConfirmReal(false)
           setOrders([])
@@ -104,11 +112,28 @@ export function MerchantPanel({ provider, onProviderChange }: Props) {
     listeningRef.current = false
     listenRef.current?.cancel()
     listenRef.current = null
+    wakeEnabledRef.current = false
+    wakeRef.current?.cancel()
+    wakeRef.current = null
+  }, [])
+
+  useEffect(() => {
+    const suspend = () => {
+      if (!document.hidden || !wakeEnabledRef.current) return
+      stopCapture()
+      setVoiceNote('HeyPEY se apagó al salir de la pestaña. Actívalo de nuevo para escuchar.')
+    }
+    document.addEventListener('visibilitychange', suspend)
+    return () => document.removeEventListener('visibilitychange', suspend)
   }, [])
 
   useEffect(() => {
     if (listening) document.getElementById('dictate-cancel')?.focus()
   }, [listening])
+
+  useEffect(() => {
+    if (wakeEnabled) document.getElementById('wake-cancel')?.focus()
+  }, [wakeEnabled])
 
   useEffect(() => {
     if (consentOpen) document.getElementById('dictate-accept')?.focus()
@@ -172,9 +197,32 @@ export function MerchantPanel({ provider, onProviderChange }: Props) {
     const active = listenRef.current
     listenRef.current = null
     active?.cancel()
+    wakeEnabledRef.current = false
+    const wake = wakeRef.current
+    wakeRef.current = null
+    wake?.cancel()
     setListening(false)
+    setWakeEnabled(false)
     setConsentOpen(false)
     if (wasListening) setVoiceNote('Dictado cancelado. Puedes escribir el importe.')
+  }
+
+  function applySpokenAmount(transcript: string): boolean {
+    const parsed = parseSpokenAmount(transcript)
+    if (!parsed.ok) {
+      setVoiceNote(parsed.message)
+      return false
+    }
+    setAmount(centsToField(parsed.cents))
+    setAmountSource('spoken')
+    setReviewCents(parsed.cents)
+    setConfirmReal(false)
+    setVoiceNote(
+      parsed.mentionsCash && methodRef.current !== 'cash'
+        ? 'La frase menciona efectivo. El método sigue igual. Elige Efectivo si quieres cambiarlo.'
+        : 'Importe dictado. Revísalo antes de continuar.',
+    )
+    return true
   }
 
   function beginListen() {
@@ -192,20 +240,7 @@ export function MerchantPanel({ provider, onProviderChange }: Props) {
       local: speechMode === 'local',
       onFinal: (transcript) => {
         if (epoch !== listenEpoch.current || editedDuringListen.current) return
-        const parsed = parseSpokenAmount(transcript)
-        if (!parsed.ok) {
-          setVoiceNote(parsed.message)
-          return
-        }
-        setAmount(centsToField(parsed.cents))
-        setAmountSource('spoken')
-        setReviewCents(parsed.cents)
-        setConfirmReal(false)
-        setVoiceNote(
-          parsed.mentionsCash && methodRef.current !== 'cash'
-            ? 'La frase menciona efectivo. El método sigue igual. Elige Efectivo si quieres cambiarlo.'
-            : '',
-        )
+        applySpokenAmount(transcript)
       },
       onError: (message) => {
         if (epoch !== listenEpoch.current) return
@@ -222,13 +257,59 @@ export function MerchantPanel({ provider, onProviderChange }: Props) {
   }
 
   function dictate() {
-    if (!session || !stallVerified || busy || listeningRef.current) return
+    if (!session || !stallVerified || busy || listeningRef.current || wakeEnabledRef.current) return
     if (speechMode === 'remote') {
       consentRef.current = true
+      setConsentTarget('dictate')
       setConsentOpen(true)
       return
     }
     if (speechMode === 'local') beginListen()
+  }
+
+  function beginWake() {
+    if (!session || !stallVerified || busy || wakeEnabledRef.current || listeningRef.current || speechMode === 'none' || speechMode === 'checking') return
+    const epoch = ++listenEpoch.current
+    consentRef.current = false
+    setConsentOpen(false)
+    wakeEnabledRef.current = true
+    editedDuringListen.current = false
+    setWakeEnabled(true)
+    setConfirmReal(false)
+    setVoiceNote('HeyPEY está atento. Di «HeyPEY» y después el importe.')
+    const handle = armHeyPey(window as unknown as SpeechHost, {
+      local: speechMode === 'local',
+      onWake: () => {
+        if (epoch !== listenEpoch.current) return
+        setVoiceNote('HeyPEY te escucha. Di el importe, por ejemplo «un centavo».')
+      },
+      onAmount: (text) => {
+        if (epoch !== listenEpoch.current || editedDuringListen.current) return false
+        const phrase = text.startsWith('cobrale ') ? text : 'Cóbrale ' + text
+        return applySpokenAmount(phrase)
+      },
+      onError: (message) => {
+        if (epoch === listenEpoch.current) setVoiceNote(message)
+      },
+      onEnd: () => {
+        if (epoch !== listenEpoch.current) return
+        wakeEnabledRef.current = false
+        wakeRef.current = null
+        setWakeEnabled(false)
+      },
+    })
+    if (wakeEnabledRef.current) wakeRef.current = handle
+  }
+
+  function activateWake() {
+    if (!session || !stallVerified || busy || listeningRef.current || wakeEnabledRef.current) return
+    if (speechMode === 'remote') {
+      consentRef.current = true
+      setConsentTarget('wake')
+      setConsentOpen(true)
+      return
+    }
+    if (speechMode === 'local') beginWake()
   }
 
   async function refreshOrders() {
@@ -242,7 +323,7 @@ export function MerchantPanel({ provider, onProviderChange }: Props) {
   }
 
   async function submitOrder() {
-    if (listeningRef.current || consentRef.current) {
+    if (listeningRef.current || wakeEnabledRef.current || consentRef.current) {
       setActionMessage('Termina o cancela el dictado antes de crear la orden.')
       return
     }
@@ -410,6 +491,7 @@ export function MerchantPanel({ provider, onProviderChange }: Props) {
                   placeholder="45.00"
                   value={amount}
                   onChange={(event) => {
+                    if (wakeEnabledRef.current) stopCapture()
                     editedDuringListen.current = true
                     setAmount(event.target.value)
                     setAmountSource('manual')
@@ -429,18 +511,31 @@ export function MerchantPanel({ provider, onProviderChange }: Props) {
                       Cancelar dictado
                     </Button>
                   ) : (
-                    <Button type="button" variant="outline" className="voice-dictate" onClick={dictate} disabled={!stallVerified || busy}>
+                    <Button type="button" variant="outline" className="voice-dictate" onClick={dictate} disabled={!stallVerified || busy || wakeEnabled || consentOpen}>
                       Dictar importe
+                    </Button>
+                  )
+                )}
+                {speechMode !== 'none' && speechMode !== 'checking' && !listening && (
+                  wakeEnabled ? (
+                    <Button type="button" id="wake-cancel" variant="outline" className="voice-dictate" onClick={stopCapture}>
+                      Apagar HeyPEY
+                    </Button>
+                  ) : (
+                    <Button type="button" variant="outline" className="voice-dictate" onClick={activateWake} disabled={!stallVerified || busy || consentOpen}>
+                      Activar HeyPEY
                     </Button>
                   )
                 )}
                 {consentOpen && (
                   <Alert>
                     <CircleAlert aria-hidden="true" />
-                    <AlertTitle>Dictado del navegador</AlertTitle>
-                    <AlertDescription>El navegador puede enviar tu voz a su servicio de reconocimiento. No guardamos audio ni transcripciones. También puedes escribir el importe.</AlertDescription>
+                    <AlertTitle>{consentTarget === 'wake' ? 'Activar HeyPEY' : 'Dictado del navegador'}</AlertTitle>
+                    <AlertDescription>{consentTarget === 'wake'
+                      ? 'Mientras HeyPEY esté activo, el navegador puede enviar lo que escucha a su servicio de reconocimiento. Se apaga al salir de esta pestaña. No guardamos audio ni transcripciones.'
+                      : 'El navegador puede enviar tu voz a su servicio de reconocimiento. No guardamos audio ni transcripciones. También puedes escribir el importe.'}</AlertDescription>
                     <div className="voice-actions">
-                      <Button id="dictate-accept" type="button" onClick={beginListen}>Aceptar y dictar</Button>
+                      <Button id="dictate-accept" type="button" onClick={consentTarget === 'wake' ? beginWake : beginListen}>{consentTarget === 'wake' ? 'Aceptar y activar HeyPEY' : 'Aceptar y dictar'}</Button>
                       <Button type="button" variant="outline" onClick={() => { consentRef.current = false; setConsentOpen(false); document.getElementById('order-amount')?.focus() }}>Escribir el importe</Button>
                     </div>
                   </Alert>
@@ -475,11 +570,11 @@ export function MerchantPanel({ provider, onProviderChange }: Props) {
               <AlertDescription>Esta acción consulta Pey. El pago solo ocurre si alguien autoriza la transferencia en su banco.</AlertDescription>
               <div className="real-confirmation__actions">
                 <Button variant="outline" onClick={() => setConfirmReal(false)}>Volver</Button>
-                <Button onClick={submitOrder} disabled={busy || !stallVerified || listening || consentOpen}>Confirmar y generar QR</Button>
+                <Button onClick={submitOrder} disabled={busy || !stallVerified || listening || wakeEnabled || consentOpen}>Confirmar y generar QR</Button>
               </div>
             </Alert>
           ) : (
-            <Button size="lg" className="create-button" onClick={submitOrder} disabled={busy || !stallVerified || listening || consentOpen}>
+            <Button size="lg" className="create-button" onClick={submitOrder} disabled={busy || !stallVerified || listening || wakeEnabled || consentOpen}>
               {busy ? 'Espera…' : method === 'cash' ? 'Registrar efectivo' : provider === 'pey' ? 'Preparar QR real' : 'Crear orden de prueba'}
               {!busy && <ArrowRight aria-hidden="true" />}
             </Button>

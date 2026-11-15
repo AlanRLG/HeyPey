@@ -83,7 +83,8 @@ button { cursor: pointer; }
 .site-header { position: relative; z-index: 5; background: #f5f6f1; border-bottom: 1px solid #d8e0dc; }
 .site-header__inner { max-width: 1380px; min-height: 78px; margin: auto; padding: 12px 36px; display: flex; align-items: center; justify-content: space-between; gap: 28px; }
 .brand { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; color: #163d43; font-family: 'Bricolage Grotesque Variable', sans-serif; font-size: 1.35rem; font-weight: 800; letter-spacing: -.03em; white-space: nowrap; }
-.brand__mark { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 11px; background: #163d43; color: #f2c66d; }
+.brand__logo { display: block; width: 40px; height: 40px; border-radius: 11px; object-fit: cover; }
+.brand__pey { color: #167c95; }
 .brand__dot { color: #ad7127; }
 .brand small { display: block; margin-top: -7px; font-family: 'Geist Variable', sans-serif; font-size: .63rem; font-weight: 650; letter-spacing: .08em; }
 .site-nav { display: flex; align-items: center; gap: 28px; }

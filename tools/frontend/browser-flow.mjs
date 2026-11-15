@@ -188,6 +188,17 @@ await expect(page.getByText('El navegador puede enviar tu voz a su servicio de r
 if (state.posts.length !== postsBeforeVoice) throw new Error('El consentimiento creó una orden')
 await page.getByRole('button', { name: 'Escribir el importe' }).click()
 await expect(page.getByText('El navegador puede enviar tu voz a su servicio de reconocimiento.')).toHaveCount(0)
+const startsBeforeWakeConsent = await page.evaluate(() => window.__speechStarts ?? 0)
+await page.getByRole('button', { name: 'Activar HeyPEY' }).click()
+await expect(page.getByText('Mientras HeyPEY esté activo, el navegador puede enviar lo que escucha')).toBeVisible()
+if (await page.evaluate(() => window.__speechStarts ?? 0) !== startsBeforeWakeConsent) {
+  throw new Error('HeyPEY abrió el micrófono antes de aceptar el aviso')
+}
+await page.evaluate(() => { window.__speechNext = { hang: true } })
+await page.getByRole('button', { name: 'Aceptar y activar HeyPEY' }).click()
+await expect(page.getByRole('button', { name: 'Apagar HeyPEY' })).toBeVisible()
+await page.getByRole('button', { name: 'Apagar HeyPEY' }).click()
+if (state.posts.length !== postsBeforeVoice) throw new Error('Activar HeyPEY creó una orden')
 
 await page.evaluate(() => {
   sessionStorage.setItem('speech-local', '1')
@@ -195,6 +206,19 @@ await page.evaluate(() => {
 })
 await page.reload({ waitUntil: 'networkidle' })
 await expect(page.getByRole('button', { name: 'Dictar importe' })).toBeVisible()
+await page.evaluate(() => { window.__speechNext = { hang: true } })
+await page.getByRole('button', { name: 'Activar HeyPEY' }).click()
+await expect(page.getByRole('button', { name: 'Apagar HeyPEY' })).toBeVisible()
+await expect(page.getByRole('button', { name: 'Crear orden de prueba' })).toBeDisabled()
+await page.evaluate(() => {
+  const first = { isFinal: true, 0: { transcript: 'Hey pay' } }
+  const second = { isFinal: true, 0: { transcript: 'un centavo' } }
+  window.__speech.onresult?.({ results: [first] })
+  window.__speech.onresult?.({ results: [first, second] })
+})
+await expect(page.getByLabel('Importe en pesos mexicanos')).toHaveValue('0.01')
+await expect(page.getByRole('button', { name: 'Activar HeyPEY' })).toBeVisible()
+if (state.posts.length !== postsBeforeVoice) throw new Error('HeyPEY creó una orden sin confirmación')
 await page.evaluate((final) => { window.__speechNext = { final } }, 'Cóbrale, son doscientos cuarenta')
 await page.getByRole('button', { name: 'Dictar importe' }).click()
 await expect(page.getByRole('button', { name: 'Aceptar y dictar' })).toHaveCount(0)
@@ -377,7 +401,8 @@ await expect(page.getByRole('button', { name: 'Crear orden de prueba' })).toHave
 await expect(page.getByText('Pey · pago real')).toBeVisible()
 
 await page.goto('http://127.0.0.1:5173/', { waitUntil: 'networkidle' })
-await expect(page.getByText('El dictado web del importe ya existe en navegadores compatibles')).toBeVisible()
+await expect(page.getByRole('link', { name: 'HeyPEY, inicio' })).toBeVisible()
+await expect(page.getByText('el comerciante puede activar HeyPEY mientras esta pestaña esté abierta')).toBeVisible()
 await expect(page.getByRole('heading', { name: 'Dos pantallas, un servidor.' })).toBeVisible()
 await expect(page.getByText('Escribe o dicta el importe, lo revisa y después crea la orden.')).toBeVisible()
 await page.getByRole('link', { name: 'Ver pantalla del cliente' }).click()

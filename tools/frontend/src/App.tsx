@@ -1,5 +1,5 @@
 import { Link, NavLink, Route, Routes, useSearchParams } from 'react-router-dom'
-import { ArrowRight, AudioLines, Eye, LockKeyhole } from 'lucide-react'
+import { ArrowRight, Eye, LockKeyhole } from 'lucide-react'
 import BlurText from '@/components/BlurText'
 import { CustomerPanel } from '@/components/CustomerPanel'
 import { CounterFlow, ModeGuide } from '@/components/HomeSections'
@@ -11,9 +11,9 @@ import type { Provider } from '@/lib/api'
 
 function SiteHeader() {
   return <header className="site-header"><div className="site-header__inner">
-    <Link className="brand" to="/" aria-label="Copiloto Zero-UI, inicio">
-      <span className="brand__mark"><AudioLines size={23} strokeWidth={2.5} aria-hidden="true" /></span>
-      <span>copiloto<span className="brand__dot">.</span><small>zero-ui</small></span>
+    <Link className="brand" to="/" aria-label="HeyPEY, inicio">
+      <img className="brand__logo" src="/heypey-logo.jpeg" alt="" width="40" height="40" />
+      <span>Hey<span className="brand__pey">PEY</span></span>
     </Link>
     <nav className="site-nav" aria-label="Navegación principal">
       <NavLink to="/" end>Inicio</NavLink><NavLink to="/demo">Demo</NavLink>
@@ -29,13 +29,13 @@ function Home() {
       <section className="hero"><div className="hero__inner">
         <div className="hero__copy">
           <Badge variant="outline" className="hero__status"><span className="status-dot" /> Backend Pey verificado con un pago real</Badge>
-          <BlurText text="El pago se comprueba. La palabra aparece." animateBy="words" trigger="load" effect="focus" delay={110} className="hero__title" />
+          <BlurText text="Di HeyPEY. Revisa el monto. Cobra." animateBy="words" trigger="load" effect="focus" delay={110} className="hero__title" />
           <p className="hero__description">El comerciante prepara el cobro y recibe una palabra privada. El cliente la ve solo cuando el servidor confirma el pago. Una demostración clara para ambos lados del mostrador.</p>
           <div className="hero__actions">
             <Button size="lg" asChild><Link to="/demo">Probar la demo sin dinero <ArrowRight aria-hidden="true" /></Link></Button>
             <Button size="lg" variant="outline" asChild><Link to="/cliente">Ver pantalla del cliente</Link></Button>
           </div>
-          <p className="hero__fineprint">La demo usa MockProvider y no mueve dinero. Pey ya se probó con una transferencia real de $0.01 confirmada por webhook. El dictado web del importe ya existe en navegadores compatibles; Android, Bluetooth y el reconocimiento local propio siguen pendientes. Si el navegador no reconoce la voz en el dispositivo, el comerciante acepta antes que pueda enviarla a su servicio.</p>
+          <p className="hero__fineprint">La demo usa MockProvider y no mueve dinero. Pey ya se probó con una transferencia real de $0.01 confirmada por webhook. En navegadores compatibles, el comerciante puede activar HeyPEY mientras esta pestaña esté abierta; el importe se revisa antes de crear una orden. Android, Bluetooth y el reconocimiento local propio siguen pendientes.</p>
         </div>
         <div className="hero__preview">
           <CustomerPanel provider="mock" compact />
@@ -89,7 +89,7 @@ function CustomerPage() {
 }
 
 function Footer() {
-  return <footer className="site-footer"><div className="site-footer__inner"><Separator /><div><span>Copiloto Acústico Zero-UI</span><span>Demo web: MockProvider · Pey: pago real verificado · Dictado web del importe en navegadores compatibles · Android, Bluetooth y reconocimiento local propio: pendientes</span></div></div></footer>
+  return <footer className="site-footer"><div className="site-footer__inner"><Separator /><div><span>HeyPEY</span><span>Demo web: MockProvider · Pey: pago real verificado · Voz en la pestaña activa de navegadores compatibles · Android, Bluetooth y reconocimiento local propio: pendientes</span></div></div></footer>
 }
 
 export default function App() {

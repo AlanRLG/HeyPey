@@ -1,6 +1,6 @@
-# Copiloto Acústico Zero-UI
+# HeyPEY · Copiloto Acústico Zero-UI
 
-Proyecto para el hack de Cursor. El producto permite a un comerciante preparar cobros y confirmar pagos con una **palabra secreta de un solo uso**. La prueba del pago viene de un evento verificado por el servidor. En la web, el comerciante puede dictar solo el importe; Android y el reconocimiento local propio siguen pendientes.
+Proyecto para el hack de Cursor. El producto permite a un comerciante preparar cobros y confirmar pagos con una **palabra secreta de un solo uso**. La prueba del pago viene de un evento verificado por el servidor. En la web, el comerciante puede dictar el importe o activar HeyPEY para empezar a dictarlo con una frase; Android y el reconocimiento local propio siguen pendientes.
 
 ## Estado
 
@@ -12,7 +12,7 @@ La prueba que cuenta es una sola orden de $0.01: pasó a `PAID` porque el webhoo
 
 | Funciona | Es simulado | Falta |
 |---|---|---|
-| Órdenes con número diario y palabra de un solo uso (24 h, o últimas 200); idempotencia; reintento si el QR falló; efectivo (`PAID_CASH`); corrección; lectura de una orden; catálogo y corte del día. En la web, «Dictar importe» solo rellena el monto del comerciante y no crea la orden | El banco (`MockProvider`, tabla `mock_charges`) y el QR (`MOCKCODI|SIMULADO|...`, no es CoDi válido). El reconocimiento web puede salir del dispositivo si el navegador no tiene modo local | App Android, Bluetooth y el reconocimiento local propio (VAD, whisper.cpp). El simulador web aún no llama a corregir, catálogo ni corte |
+| Órdenes con número diario y palabra de un solo uso (24 h, o últimas 200); idempotencia; reintento si el QR falló; efectivo (`PAID_CASH`); corrección; lectura de una orden; catálogo y corte del día. En la web, «Dictar importe» y HeyPEY solo rellenan el monto del comerciante y no crean la orden | El banco (`MockProvider`, tabla `mock_charges`) y el QR (`MOCKCODI|SIMULADO|...`, no es CoDi válido). El reconocimiento web puede salir del dispositivo si el navegador no tiene modo local | App Android, Bluetooth y el reconocimiento local propio (VAD, whisper.cpp). El simulador web aún no llama a corregir, catálogo ni corte |
 | Webhook firmado (HMAC en mock, Standard Webhooks en pey). El pago se marca solo si `GET /transaction/{id}` confirma id, `PAID`, `API_CODI_QR`, el QR, `CODI`, `MXN`, el monto y la orden. Una orden de $0.01 llegó a `PAID` por ese webhook | El botón del comerciante llama a `/mock-pay`, solo para puestos `provider = 'mock'` | No repetir el cobro. El QR que venció sin pago no cuenta como prueba |
 | La vista pública consulta `/public-orders` para un puesto `mock` o `pey` con `public_announce`. La palabra aparece **solo** en un `PAID` que no sea tardío. En la orden de $0.01 esa palabra coincidió | Cuenta y puesto de demo con datos ficticios, proveedor `mock`. El puesto pey no guarda cuenta propia | El simulador público sigue sin `STALL_ID` |
 | Pago tardío: la orden cancelada o expirada pasa a `PAID` con `late_payment`; el aviso es solo del comerciante | | |
@@ -51,7 +51,7 @@ docs/                   Alcance y plan de demo
 
 ## Enfoque para la demo
 
-El flujo con `MockProvider` ya está construido: el comerciante escribe o dicta el importe, crea la orden, muestra un QR de prueba, simula el pago, el servidor verifica el evento y la vista pública anuncia el número con la palabra correcta. Dictar no crea la orden ni confirma el pago. Si el navegador no reconoce la voz en el dispositivo, pide aceptación porque puede enviarla a su servicio; esta app no guarda audio ni transcripciones. Pey ya está integrado y quedó verificado con una transferencia real de $0.01 por webhook. La interfaz React muestra ambos puestos; solo la vista autenticada del comerciante puede generar un QR real. Faltan Android, Bluetooth y el reconocimiento local propio. Ver [plan de demo](docs/PLAN_DEMO.md).
+El flujo con `MockProvider` ya está construido: el comerciante escribe o dicta el importe, crea la orden, muestra un QR de prueba, simula el pago, el servidor verifica el evento y la vista pública anuncia el número con la palabra correcta. «Activar HeyPEY» en la vista privada enciende la escucha solo mientras la pestaña siga activa; después de «HeyPEY», acepta el importe en esa frase o en la siguiente. Se apaga cuando obtiene un monto, el comerciante lo apaga o cambia de pestaña. Dictar no crea la orden ni confirma el pago. Si el navegador no reconoce la voz en el dispositivo, pide aceptación porque puede enviarla a su servicio; esta app no guarda audio ni transcripciones. Pey ya está integrado y quedó verificado con una transferencia real de $0.01 por webhook. La interfaz React muestra ambos puestos; solo la vista autenticada del comerciante puede generar un QR real. Faltan Android, Bluetooth y el reconocimiento local propio. Ver [plan de demo](docs/PLAN_DEMO.md).
 
 ## Configuración de Vercel
 
@@ -62,11 +62,11 @@ El proyecto ya está enlazado a este repositorio. Usa la raíz `/` y `main` como
 - Solo el servidor decide el estado de una orden y valida el evento firmado del proveedor.
 - La palabra secreta se genera en el servidor, se comunica al comerciante en privado y no aparece en la vista del cliente antes de un pago verificado.
 - El monto final lo determina o confirma el comerciante; el cliente lo ve antes de pagar.
-- Los audios se procesan localmente y no se almacenan ni se suben.
+- La app no almacena audio ni transcripciones. Si el navegador no tiene reconocimiento local y el comerciante acepta, su servicio de reconocimiento puede recibir la voz.
 - `MockProvider` permite desarrollar y demostrar sin credenciales ni dinero real.
 
 Los detalles del proveedor, políticas de Realtime, licencias de modelos y requisitos legales siguen marcados **por verificar** en el documento original.
 
 ## Abrir en Cursor
 
-Abre la carpeta raíz del repositorio. Cursor leerá `AGENTS.md` como contexto del proyecto. Para trabajar en el frontend, entra a `tools/frontend`, ejecuta `npm ci` y `npm run dev`. Siguiente tarea de producto: entrada de voz y app Android, reutilizando las mismas Edge Functions.
+Abre la carpeta raíz del repositorio. Cursor leerá `AGENTS.md` como contexto del proyecto. Para trabajar en el frontend, entra a `tools/frontend`, ejecuta `npm ci` y `npm run dev`. La activación HeyPEY de la web requiere permiso del micrófono y una pestaña visible; no funciona como escucha permanente del sistema. La app Android y el reconocimiento local propio siguen pendientes.
