@@ -9,7 +9,10 @@ const cases = [
   { name: 'home-mobile', path: '/', width: 390, height: 844 },
   { name: 'demo-desktop', path: '/demo', width: 1440, height: 900 },
   { name: 'demo-mobile', path: '/demo', width: 390, height: 844 },
+  { name: 'merchant-desktop', path: '/comerciante', width: 1440, height: 900 },
+  { name: 'merchant-mobile', path: '/comerciante', width: 390, height: 844 },
   { name: 'customer-desktop', path: '/cliente', width: 1440, height: 900 },
+  { name: 'customer-mobile', path: '/cliente', width: 390, height: 844 },
 ]
 for (const item of cases) {
   const context = await browser.newContext({ viewport: { width: item.width, height: item.height } })

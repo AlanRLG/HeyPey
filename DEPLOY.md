@@ -423,8 +423,8 @@ La interfaz nueva vive en `tools/frontend/`. `vercel.json` ejecuta `npm ci` y `n
 
 - `/` presenta el mecanismo y consulta la vista pública Mock.
 - `/demo` muestra comerciante y cliente lado a lado. Solo usa el puesto Mock; el QR y el pago son simulados.
-- `/comerciante` exige sesión Supabase. Permite elegir el puesto Mock o Pey; el modo Pey pide una segunda confirmación antes de crear un QR real. Ningún botón del navegador marca por sí mismo una orden Pey como pagada.
-- `/cliente` consulta `public-orders` sin sesión. `?modo=pey` muestra el puesto Pey; antes de `PAID` no recibe la palabra.
+- `/comerciante` muestra solo la vista privada y exige sesión Supabase. Permite elegir el puesto Mock o Pey; el modo Pey pide una segunda confirmación antes de crear un QR real. Ningún botón del navegador marca por sí mismo una orden Pey como pagada.
+- `/cliente` muestra solo la vista pública y consulta `public-orders` sin sesión. `?modo=pey` muestra el puesto Pey; antes de `PAID` no recibe la palabra. En un puesto con dos dispositivos, ábrela en el que mira el comprador y usa el mismo proveedor que en `/comerciante`.
 
 `tools/frontend/public/config.js` contiene la URL de Supabase, la clave pública `anon` y los dos IDs públicos de puesto. Nunca contiene `service_role`, `PEY_API_KEY`, `PEY_WEBHOOK_SECRET` ni credenciales del comerciante. La ruta `/demo` es la opción segura para el jurado: no mueve dinero.
 

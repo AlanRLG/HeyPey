@@ -12,7 +12,7 @@
 ## Alcance de la demo web
 
 - Backend: esquema de órdenes, selección de palabras, `MockProvider`, endpoint para crear orden y endpoint de pago simulado.
-- Web: `/demo` muestra comerciante y cliente lado a lado; `/cliente` funciona sin credenciales. El modo Mock indica **sin dinero real**.
+- Web: `/demo` muestra comerciante y cliente lado a lado para el jurado. En dos dispositivos, `/comerciante` muestra solo la vista privada y `/cliente` solo la pública, sin credenciales. El modo Mock indica **sin dinero real**.
 - Estados mínimos: `CREATING`, `AWAITING_PAYMENT`, `PAID`, `PAID_CASH`, `EXPIRED`, `CANCELLED` y `FAILED`.
 - Pruebas: evento duplicado, monto distinto, cancelación, dos órdenes activas y palabra no expuesta antes de pagar.
 

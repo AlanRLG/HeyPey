@@ -57,15 +57,18 @@ function Workspace({ mockOnly }: { mockOnly?: boolean }) {
   const [params, setParams] = useSearchParams()
   const provider: Provider = mockOnly ? 'mock' : params.get('modo') === 'pey' ? 'pey' : 'mock'
   const changeProvider = (next: Provider) => setParams(next === 'pey' ? { modo: 'pey' } : {})
-  return <main id="contenido" className="workspace">
+  return <main id="contenido" className={mockOnly ? 'workspace' : 'workspace workspace--merchant'}>
     <div className="workspace__intro">
       <div><p className="surface-label">{mockOnly ? 'Demostración segura' : 'Mesa de cobro'}</p>
-        <h1>{mockOnly ? 'Dos lados del mismo pago.' : 'Tu puesto, de punta a punta.'}</h1>
-        <p>{mockOnly ? 'Crea una orden a la izquierda y observa cuándo aparece la palabra a la derecha. Ningún pago de esta pantalla mueve dinero.' : 'Crea órdenes desde tu cuenta y observa la pantalla pública tal como la verá el cliente.'}</p>
+        <h1>{mockOnly ? 'Dos lados del mismo pago.' : 'Tu puesto, bajo tu control.'}</h1>
+        <p>{mockOnly ? 'Crea una orden a la izquierda y observa cuándo aparece la palabra a la derecha. Ningún pago de esta pantalla mueve dinero.' : 'Esta pantalla es privada: crea órdenes y consulta su estado aquí. Abre la vista Cliente en el otro dispositivo.'}</p>
       </div>
       <Badge variant="outline" className="workspace__mode">{provider === 'mock' ? 'Mock · sin dinero real' : 'Pey · cobro real'}</Badge>
     </div>
-    <div className="workspace__grid"><MerchantPanel key={`merchant-${provider}`} provider={provider} onProviderChange={mockOnly ? undefined : changeProvider} /><CustomerPanel key={`customer-${provider}`} provider={provider} /></div>
+    <div className={mockOnly ? 'workspace__grid' : 'workspace__merchant'}>
+      <MerchantPanel key={`merchant-${provider}`} provider={provider} onProviderChange={mockOnly ? undefined : changeProvider} />
+      {mockOnly && <CustomerPanel provider="mock" />}
+    </div>
   </main>
 }
 

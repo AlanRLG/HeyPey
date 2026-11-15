@@ -38,7 +38,11 @@ await page.route('**/edge-functions/public-orders?**', (route) => route.fulfill(
 await page.route('**/edge-functions/orders?**', (route) => route.fulfill({
   status: 200,
   contentType: 'application/json',
-  body: JSON.stringify({ orders: route.request().url().includes('343eff54') ? [] : order ? [{ ...order, state: paid ? 'PAID' : 'AWAITING_PAYMENT' }] : [] }),
+  body: JSON.stringify({
+    orders: route.request().url().includes('343eff54')
+      ? realCreated && order ? [order] : []
+      : order ? [{ ...order, state: paid ? 'PAID' : 'AWAITING_PAYMENT' }] : [],
+  }),
 }))
 await page.route('**/edge-functions/orders', async (route) => {
   if (route.request().method() !== 'POST') return route.continue()
@@ -67,6 +71,7 @@ await page.route('**/edge-functions/mock-pay', async (route) => {
 
 await page.goto('http://127.0.0.1:5173/demo', { waitUntil: 'networkidle' })
 await expect(page.getByText('Prepara el siguiente cobro')).toBeVisible()
+await expect(page.locator('.customer-panel')).toHaveCount(1)
 await page.getByLabel('Importe en pesos mexicanos').fill('45.00')
 await page.getByRole('button', { name: 'Crear orden de prueba' }).click()
 await expect(page.getByText('Orden 24').first()).toBeVisible()
@@ -78,6 +83,7 @@ if (created !== 1) throw new Error('Se crearon ' + created + ' órdenes')
 console.log('Flujo de navegador Mock: orden creada una vez, palabra oculta antes del pago y visible después.')
 await page.goto('http://127.0.0.1:5173/comerciante?modo=pey', { waitUntil: 'networkidle' })
 await expect(page.getByText('Prepara el siguiente cobro')).toBeVisible()
+await expect(page.locator('.customer-panel')).toHaveCount(0)
 await page.getByLabel('Importe en pesos mexicanos').fill('0.01')
 await page.getByRole('button', { name: 'Preparar QR real' }).click()
 await expect(page.getByText('Vas a generar un QR real por $0.01')).toBeVisible()
@@ -89,4 +95,8 @@ await page.getByRole('button', { name: 'Confirmar y generar QR' }).click()
 await expect(page.getByText('Orden 24').first()).toBeVisible()
 if (realCreated !== 1) throw new Error('Se crearon ' + realCreated + ' órdenes Pey')
 console.log('Flujo de navegador Pey simulado: ninguna creación antes de confirmar; POST único de 1 centavo.')
+await page.goto('http://127.0.0.1:5173/cliente?modo=pey', { waitUntil: 'networkidle' })
+await expect(page.locator('.customer-panel')).toHaveCount(1)
+await expect(page.locator('.merchant-panel')).toHaveCount(0)
+console.log('Rutas separadas: comerciante privado y cliente público; ambas vistas solo en /demo.')
 await browser.close()

@@ -122,12 +122,14 @@ button { cursor: pointer; }
 .site-footer__inner span:first-child { color: #163d43; font-weight: 700; }
 
 .workspace, .public-page { max-width: 1380px; margin: auto; padding: 52px 36px 90px; }
+.workspace--merchant { max-width: 920px; }
 .workspace__intro, .public-page__intro { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 30px; }
 .workspace__intro h1, .public-page__intro h1 { margin: 0; font-family: 'Bricolage Grotesque Variable', sans-serif; font-size: clamp(2.45rem, 4vw, 4.2rem); line-height: 1.04; font-weight: 750; letter-spacing: -.03em; }
 .workspace__intro p:last-child, .public-page__intro p:last-child { max-width: 64ch; margin-top: 12px; color: #4d666a; line-height: 1.6; }
 .workspace__mode { height: 32px; white-space: nowrap; background: white; color: #365a5e; }
 .workspace__grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); gap: 18px; align-items: start; }
 .workspace__grid > * { min-width: 0; }
+.workspace__merchant { min-width: 0; }
 .merchant-panel, .customer-panel { border: 1px solid #d8e0dc; box-shadow: none; }
 .merchant-panel__heading { display: flex; flex-direction: row; align-items: start; justify-content: space-between; gap: 16px; }
 .merchant-panel__heading [data-slot=card-description], .merchant-panel--login [data-slot=card-description] { max-width: 50ch; line-height: 1.5; }
