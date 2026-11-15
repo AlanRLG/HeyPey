@@ -1,0 +1,23 @@
+.voice-block { display: flex; flex-direction: column; gap: 10px; }
+.voice-review {
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid #e3d3a4;
+  border-radius: 12px;
+  background: #f8f1df;
+  color: #163d43;
+}
+.voice-review strong {
+  display: block;
+  font-family: 'Bricolage Grotesque Variable', sans-serif;
+  font-size: 2rem;
+  font-weight: 720;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.voice-review span { display: block; margin-top: 4px; color: #4d666a; font-size: .95rem; }
+.voice-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.voice-actions [data-slot=button] { min-height: 44px; }
+.voice-block [data-slot=alert] { color: #163d43; background: #fff; }
+.voice-note { margin: 0; color: #4d666a; font-size: .9rem; line-height: 1.4; }
+.voice-dictate { width: 100%; min-height: 46px; justify-content: center; }

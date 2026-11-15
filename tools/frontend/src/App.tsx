@@ -1,7 +1,8 @@
 import { Link, NavLink, Route, Routes, useSearchParams } from 'react-router-dom'
-import { ArrowRight, AudioLines, BanknoteArrowUp, CheckCheck, ShieldCheck } from 'lucide-react'
+import { ArrowRight, AudioLines, Eye, LockKeyhole } from 'lucide-react'
 import BlurText from '@/components/BlurText'
 import { CustomerPanel } from '@/components/CustomerPanel'
+import { CounterFlow, ModeGuide } from '@/components/HomeSections'
 import { MerchantPanel } from '@/components/MerchantPanel'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -34,21 +35,14 @@ function Home() {
             <Button size="lg" asChild><Link to="/demo">Probar la demo sin dinero <ArrowRight aria-hidden="true" /></Link></Button>
             <Button size="lg" variant="outline" asChild><Link to="/cliente">Ver pantalla del cliente</Link></Button>
           </div>
-          <p className="hero__fineprint">La demo usa MockProvider. Pey ya se probó con una transferencia real de $0.01 y un webhook verificado.</p>
+          <p className="hero__fineprint">La demo usa MockProvider y no mueve dinero. Pey ya se probó con una transferencia real de $0.01 confirmada por webhook. El dictado web del importe ya existe en navegadores compatibles; Android, Bluetooth y el reconocimiento local propio siguen pendientes. Si el navegador no reconoce la voz en el dispositivo, el comerciante acepta antes que pueda enviarla a su servicio.</p>
         </div>
         <div className="hero__preview">
-          <div className="hero__preview-label"><span className="live-dot" /> Pantalla pública · datos de la demo</div>
           <CustomerPanel provider="mock" compact />
         </div>
       </div></section>
-      <section className="flow" aria-labelledby="flow-heading"><div className="flow__inner">
-        <div className="flow__intro"><h2 id="flow-heading">De cobrar a entregar, sin adivinar.</h2><p>El QR inicia la espera. El webhook confirmado cambia la orden. La palabra cierra la entrega.</p></div>
-        <ol className="flow__steps">
-          <li><BanknoteArrowUp aria-hidden="true" /><div><strong>El comerciante crea la orden</strong><span>Ve el importe y conserva la palabra en privado.</span></div></li>
-          <li><ShieldCheck aria-hidden="true" /><div><strong>El servidor verifica el pago</strong><span>Comprueba firma, importe, referencia y estado.</span></div></li>
-          <li><CheckCheck aria-hidden="true" /><div><strong>El cliente recibe la palabra</strong><span>Solo cuando la orden llega a pago confirmado.</span></div></li>
-        </ol>
-      </div></section>
+      <CounterFlow />
+      <ModeGuide />
     </main><Footer />
   </>
 }
@@ -59,15 +53,21 @@ function Workspace({ mockOnly }: { mockOnly?: boolean }) {
   const changeProvider = (next: Provider) => setParams(next === 'pey' ? { modo: 'pey' } : {})
   return <main id="contenido" className={mockOnly ? 'workspace' : 'workspace workspace--merchant'}>
     <div className="workspace__intro">
-      <div><p className="surface-label">{mockOnly ? 'Demostración segura' : 'Mesa de cobro'}</p>
+      <div>
         <h1>{mockOnly ? 'Dos lados del mismo pago.' : 'Tu puesto, bajo tu control.'}</h1>
         <p>{mockOnly ? 'Crea una orden a la izquierda y observa cuándo aparece la palabra a la derecha. Ningún pago de esta pantalla mueve dinero.' : 'Esta pantalla es privada: crea órdenes y consulta su estado aquí. Abre la vista Cliente en el otro dispositivo.'}</p>
       </div>
       <Badge variant="outline" className="workspace__mode">{provider === 'mock' ? 'Mock · sin dinero real' : 'Pey · cobro real'}</Badge>
     </div>
     <div className={mockOnly ? 'workspace__grid' : 'workspace__merchant'}>
-      <MerchantPanel key={`merchant-${provider}`} provider={provider} onProviderChange={mockOnly ? undefined : changeProvider} />
-      {mockOnly && <CustomerPanel provider="mock" />}
+      <section className="side side--private" aria-labelledby="side-private">
+        <p className="side__bar" id="side-private"><LockKeyhole aria-hidden="true" /> Lado del comerciante · privado</p>
+        <MerchantPanel key={`merchant-${provider}`} provider={provider} onProviderChange={mockOnly ? undefined : changeProvider} />
+      </section>
+      {mockOnly && <section className="side side--public" aria-labelledby="side-public">
+        <p className="side__bar" id="side-public"><Eye aria-hidden="true" /> Lado del cliente · público</p>
+        <CustomerPanel provider="mock" />
+      </section>}
     </div>
   </main>
 }
@@ -77,10 +77,10 @@ function CustomerPage() {
   const provider: Provider = params.get('modo') === 'pey' ? 'pey' : 'mock'
   return <main id="contenido" className="public-page">
     <div className="public-page__intro">
-      <div><p className="surface-label">Vista pública</p><h1>Tu pago, a la vista.</h1><p>Esta pantalla consulta directamente el estado que el servidor permite mostrar al cliente.</p></div>
+      <div><h1>Tu pago, a la vista.</h1><p>Muestra solo lo que el servidor permite ver al cliente.</p></div>
       <div className="public-page__switch" role="group" aria-label="Puesto visible">
-        <Button variant={provider === 'mock' ? 'default' : 'outline'} size="sm" onClick={() => setParams({})}>Demo</Button>
-        <Button variant={provider === 'pey' ? 'default' : 'outline'} size="sm" onClick={() => setParams({ modo: 'pey' })}>Pey real</Button>
+        <Button variant={provider === 'mock' ? 'default' : 'outline'} size="sm" aria-pressed={provider === 'mock'} onClick={() => setParams({})}>Demo sin dinero</Button>
+        <Button variant={provider === 'pey' ? 'default' : 'outline'} size="sm" aria-pressed={provider === 'pey'} onClick={() => setParams({ modo: 'pey' })}>Pey real</Button>
       </div>
     </div>
     <CustomerPanel key={provider} provider={provider} />
@@ -89,7 +89,7 @@ function CustomerPage() {
 }
 
 function Footer() {
-  return <footer className="site-footer"><div className="site-footer__inner"><Separator /><div><span>Copiloto Acústico Zero-UI</span><span>Demo web: MockProvider · Backend Pey: pago real verificado · Voz y Android: pendientes</span></div></div></footer>
+  return <footer className="site-footer"><div className="site-footer__inner"><Separator /><div><span>Copiloto Acústico Zero-UI</span><span>Demo web: MockProvider · Pey: pago real verificado · Dictado web del importe en navegadores compatibles · Android, Bluetooth y reconocimiento local propio: pendientes</span></div></div></footer>
 }
 
 export default function App() {

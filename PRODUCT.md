@@ -18,7 +18,7 @@ Un cobro asigna un número y una palabra privada al comerciante. El servidor ver
 
 ## Operating Context
 
-El comerciante y el cliente miran pantallas distintas a ambos lados de un mostrador. La demostración web debe funcionar en un portátil y en un teléfono. La voz y Android siguen pendientes.
+El comerciante y el cliente miran pantallas distintas a ambos lados de un mostrador. La demostración web debe funcionar en un portátil y en un teléfono. El comerciante puede dictar el importe en su vista privada; Android y el audio local propio siguen pendientes.
 
 ## Capabilities and Constraints
 

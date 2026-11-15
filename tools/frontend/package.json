@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "test:parser": "node --experimental-strip-types --test spoken-amount.test.mjs speech-capture.test.mjs",
     "test:browser": "node browser-flow.mjs",
     "check:visual": "node visual-check.mjs",
     "lint": "eslint .",

@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
-import { Check, Volume2, VolumeX } from 'lucide-react'
+import { Check, Clock3, Loader2, Volume2, VolumeX } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { configured, money, publicOrders, stateLabel, type Provider, type PublicOrder } from '@/lib/api'
 
 type Props = {
@@ -14,6 +14,7 @@ type Props = {
 export function CustomerPanel({ provider, compact = false }: Props) {
   const [orders, setOrders] = useState<PublicOrder[]>([])
   const [message, setMessage] = useState('')
+  const [loaded, setLoaded] = useState(false)
   const [sound, setSound] = useState(false)
   const [paidFocus, setPaidFocus] = useState<{ id: string; until: number } | null>(null)
   const [now, setNow] = useState(0)
@@ -55,6 +56,7 @@ export function CustomerPanel({ provider, compact = false }: Props) {
         first.current = false
         setOrders(result.orders)
         setMessage('')
+        setLoaded(true)
       } catch (error) {
         if (mounted) setMessage(error instanceof Error ? error.message : 'Sin conexión con el servidor.')
       } finally {
@@ -76,7 +78,8 @@ export function CustomerPanel({ provider, compact = false }: Props) {
     : null
   const current = paidOrder ??
     orders.find((order) => ['AWAITING_PAYMENT', 'PENDING_UNKNOWN', 'CREATING'].includes(order.state)) ??
-    orders.find((order) => order.state === 'PAID' && order.secretWord)
+    orders.find((order) => order.state === 'PAID' && order.secretWord) ??
+    orders.find((order) => order.state === 'PAID')
   const qrActive = Boolean(
     current?.state === 'AWAITING_PAYMENT' &&
     current.qrPayload &&
@@ -87,58 +90,76 @@ export function CustomerPanel({ provider, compact = false }: Props) {
     ? Math.max(0, Math.ceil((new Date(current.expiresAt).getTime() - now) / 1000))
     : 0
 
+  const tone = message ? 'error' : !loaded ? 'idle' : !current ? 'idle' : current.state === 'PAID' ? 'paid' : 'wait'
+  const isMock = provider === 'mock'
+
   return (
-    <Card className={'customer-panel ' + (compact ? 'customer-panel--compact' : '')}>
+    <Card className={'customer-panel customer-panel--' + tone + (compact ? ' customer-panel--compact' : '')}>
       <CardHeader className="customer-panel__header">
         <div>
-          <p className="surface-label">Pantalla del cliente</p>
-          <CardTitle className="text-lg">Aquí aparece el pago confirmado</CardTitle>
+          <h2 className="customer-panel__title">Pantalla del cliente</h2>
+          <p className="customer-panel__sub">Aquí aparece el pago confirmado.</p>
         </div>
-        <Badge variant="outline" className="customer-panel__badge">
-          {provider === 'mock' ? 'Demo sin dinero' : 'Pey · pago real'}
+        <Badge variant="outline" className={'customer-panel__badge ' + (isMock ? 'customer-panel__badge--mock' : 'customer-panel__badge--real')}>
+          {isMock ? 'Demo · sin dinero real' : 'Pey · pago real'}
         </Badge>
       </CardHeader>
       <CardContent className="customer-panel__content">
         {message ? (
-          <div className="customer-state" role="alert">
+          <div className="customer-state customer-state--error" role="alert">
             <p>No pudimos consultar las órdenes.</p>
-            <p className="customer-state__sub">{message}</p>
+            <p className="customer-state__sub">{message} Seguimos intentando cada 3 segundos.</p>
+          </div>
+        ) : !loaded ? (
+          <div className="customer-state" role="status">
+            <Loader2 className="customer-state__spinner" aria-hidden="true" />
+            <p>Conectando con el servidor…</p>
           </div>
         ) : !current ? (
           <div className="customer-state" role="status">
             <span className="customer-state__ring" aria-hidden="true" />
             <p>Esperando un cobro</p>
-            <p className="customer-state__sub">Cuando el comerciante cree una orden, verás el monto aquí.</p>
+            <p className="customer-state__sub">Cuando el comerciante cree una orden, verás aquí el importe y el QR.</p>
           </div>
         ) : current.state === 'PAID' && current.secretWord ? (
           <div className="customer-state customer-state--paid" role="status" aria-live="polite">
+            <span className="customer-state__pill customer-state__pill--paid"><Check aria-hidden="true" /> Pago confirmado</span>
             <span className="customer-state__order">Orden {current.number}</span>
             <span className="customer-state__word">{current.secretWord}</span>
-            <span className="customer-state__paid"><Check size={18} aria-hidden="true" /> Pago confirmado</span>
             <p className="customer-state__sub">Dile esta palabra al comerciante para recoger tu pedido.</p>
           </div>
-        ) : (
-          <div className="customer-state customer-state--waiting" role="status">
+        ) : current.state === 'PAID' ? (
+          <div className="customer-state customer-state--paid" role="status" aria-live="polite">
+            <span className="customer-state__pill customer-state__pill--paid"><Check aria-hidden="true" /> Pago confirmado</span>
             <span className="customer-state__order">Orden {current.number}</span>
-            <strong className="customer-state__amount">{money(current.amountCents)}</strong>
+            <strong className="customer-state__amount">{money(current.amountCents)}<small> MXN</small></strong>
+            <p className="customer-state__sub">El servidor confirmó el pago. Esta orden no trae palabra pública.</p>
+          </div>
+        ) : (
+          <div className="customer-state customer-state--waiting">
+            <div className="customer-state__live" role="status">
+              <span className="customer-state__pill customer-state__pill--wait"><Clock3 aria-hidden="true" /> {stateLabel[current.state] ?? 'Esperando confirmación'}</span>
+              <span className="customer-state__order">Orden {current.number}</span>
+              <strong className="customer-state__amount">{money(current.amountCents)}<small> MXN</small></strong>
+            </div>
             {qrActive && current.qrPayload ? (
-              <div className={'qr-frame ' + (provider === 'mock' ? 'qr-frame--mock' : '')}>
-                <QRCodeSVG value={current.qrPayload} size={compact ? 158 : 220} marginSize={1} title={provider === 'mock' ? 'QR simulado' : 'QR CoDi de Pey'} />
-                {provider === 'mock' && <span className="qr-frame__stamp">SIMULADO</span>}
+              <div className={'qr-frame ' + (isMock ? 'qr-frame--mock' : '')}>
+                <QRCodeSVG value={current.qrPayload} size={compact ? 168 : 264} marginSize={1} title={isMock ? 'QR simulado' : 'QR CoDi de Pey'} />
+                {isMock && <span className="qr-frame__stamp">SIMULADO</span>}
               </div>
             ) : (
               <div className="customer-state__pending">{stateLabel[current.state] ?? 'Esperando confirmación'}</div>
             )}
             <p className="customer-state__sub">
               {qrActive
-                ? provider === 'mock'
+                ? isMock
                   ? 'El comerciante activa el pago de prueba desde su pantalla.'
                   : 'Comprueba destinatario e importe en tu banco antes de autorizar.'
                 : current.state === 'AWAITING_PAYMENT' && secondsLeft === 0
                   ? 'El QR venció. Espera una orden nueva.'
                   : 'El servidor está verificando el estado del pago.'}
             </p>
-            {qrActive && <span className="customer-state__timer">QR vigente · {Math.floor(secondsLeft / 60)}:{String(secondsLeft % 60).padStart(2, '0')}</span>}
+            {qrActive && <span className="customer-state__timer" role="timer">QR vigente · {Math.floor(secondsLeft / 60)}:{String(secondsLeft % 60).padStart(2, '0')}</span>}
           </div>
         )}
       </CardContent>
@@ -146,14 +167,16 @@ export function CustomerPanel({ provider, compact = false }: Props) {
         <span>La palabra se libera solo después de la confirmación del servidor.</span>
         <Button
           type="button"
-          variant="ghost"
+          variant="outline"
           size="sm"
+          className="customer-panel__sound"
           onClick={() => setSound((value) => !value)}
           aria-pressed={sound}
-          aria-label={sound ? 'Desactivar anuncios de voz' : 'Activar anuncios de voz'}
+          aria-label="Anuncio por voz"
         >
           {sound ? <Volume2 aria-hidden="true" /> : <VolumeX aria-hidden="true" />}
-          {sound ? 'Sonido activo' : 'Activar sonido'}
+          Anuncio por voz
+          <span className="customer-panel__sound-state" aria-hidden="true">{sound ? 'Activo' : 'Apagado'}</span>
         </Button>
       </div>
     </Card>

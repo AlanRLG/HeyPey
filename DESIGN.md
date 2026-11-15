@@ -20,10 +20,11 @@ Tipografía: Bricolage Grotesque para titulares y números grandes; Geist para c
 
 ## Composición
 
-- Portada: una frase breve y una vista previa del flujo de dos pantallas. El producto aparece antes que la explicación.
-- Demo: comerciante y cliente lado a lado en escritorio, apilados en móvil. Cada lado conserva su propio límite de privacidad.
-- Comerciante: entrada de importe, creación de orden y lista de órdenes. El flujo Pey requiere confirmación explícita antes de generar un QR real.
-- Cliente: una orden por vez, con importe y QR grandes. La palabra ocupa el lugar del QR solo tras `PAID` no tardío.
+- Portada: una frase breve y la pantalla pública real de la demo. Debajo, una matriz de tres momentos y dos pantallas más el servidor: la celda del comerciante es tinta oscura (privado), la del cliente es blanca (público) y el servidor queda en medio como autoridad. El titular dice «Dos pantallas, un servidor». Después, dos tarjetas separan «Demo simulada» de «Pey real».
+- Demo: comerciante y cliente lado a lado en escritorio, apilados en móvil. Cada lado lleva una barra de identidad (tinta sólida y candado para el privado; contorno y ojo para el público).
+- Comerciante: entrada de importe, dictado web opcional y lista de órdenes. «Dictar importe» solo rellena el monto; el comerciante lo revisa antes de crear la orden. Si el navegador no reconoce la voz en el dispositivo, un aviso pide aceptación porque la voz puede salir del equipo. El flujo Pey requiere confirmación explícita antes de generar un QR real. Android, Bluetooth y el reconocimiento local propio siguen fuera de esta interfaz.
+- Cliente: una orden por vez, con importe y QR grandes. La palabra ocupa el lugar del QR solo cuando el servidor entrega un `PAID` no tardío con palabra. Si el estado es `PAID` y no hay palabra, la pantalla dice pago confirmado, en verde, y no inventa una palabra ni vuelve a «Esperando pago». Un riel de 7 px cambia con el estado (miel en espera, verde con pago confirmado, rojo con error) y siempre va acompañado de texto. El importe llega a 7.4 rem en escritorio; el QR mide hasta 264 px y se encoge para caber desde 320 px.
+- Accesibilidad: la región viva anuncia el estado, el importe y el número de orden; el contador del QR es un `role="timer"` fuera de esa región. «Anuncio por voz» conserva ese nombre y `aria-pressed`. El aviso del dictado se lee y se recorre con teclado. Controles y enlaces de navegación miden al menos 44 px de alto.
 
 ## Movimiento
 

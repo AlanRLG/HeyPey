@@ -3,7 +3,7 @@
 ## Recorrido objetivo
 
 1. Abre `/demo` en Vercel e inicia sesión como comerciante con las credenciales privadas del presentador.
-2. Ingresa manualmente un monto y crea una orden de prueba Mock. La pantalla del cliente muestra número, monto y un QR **claramente simulado**, sin palabra secreta.
+2. Ingresa un monto, escrito o dictado en la vista del comerciante, y crea una orden de prueba Mock. La pantalla del cliente muestra número, monto y un QR **claramente simulado**, sin palabra secreta. El dictado solo llena el importe.
 3. El comerciante recibe en su vista privada la palabra asignada a esa orden.
 4. `MockProvider` emite un evento de pago de prueba; el servidor valida monto, referencia e idempotencia.
 5. Solo entonces la orden pasa a `PAID` y la vista pública anuncia número más palabra.

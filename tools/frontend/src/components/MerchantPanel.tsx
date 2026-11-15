@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { QRCodeSVG } from 'qrcode.react'
 import { ArrowRight, Check, CircleAlert, Clock3, LockKeyhole, RefreshCw } from 'lucide-react'
+import './voice-amount.css'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -14,6 +15,9 @@ import {
   simulatePayment, stallId, stateLabel, supabase,
   type Order, type Provider,
 } from '@/lib/api'
+import { centsToField } from '@/lib/money'
+import { detectSpeechMode, listenOnce, type SpeechHost, type SpeechMode } from '@/lib/speech-capture'
+import { parseSpokenAmount } from '@/lib/spoken-amount'
 
 type Props = {
   provider: Provider
@@ -37,12 +41,24 @@ export function MerchantPanel({ provider, onProviderChange }: Props) {
   const [listError, setListError] = useState('')
   const [stallVerified, setStallVerified] = useState(false)
   const [amount, setAmount] = useState('')
+  const [amountSource, setAmountSource] = useState<'manual' | 'spoken'>('manual')
+  const [reviewCents, setReviewCents] = useState<number | null>(null)
   const [method, setMethod] = useState<'codi' | 'cash'>('codi')
   const [confirmReal, setConfirmReal] = useState(false)
   const [actionMessage, setActionMessage] = useState('')
   const [lastCreatedId, setLastCreatedId] = useState<string | null>(null)
   const [now, setNow] = useState(0)
+  const [speechMode, setSpeechMode] = useState<SpeechMode | 'checking'>('checking')
+  const [listening, setListening] = useState(false)
+  const [consentOpen, setConsentOpen] = useState(false)
+  const [voiceNote, setVoiceNote] = useState('')
   const sessionUserRef = useRef<string | null>(null)
+  const methodRef = useRef(method)
+  const listenEpoch = useRef(0)
+  const listeningRef = useRef(false)
+  const consentRef = useRef(false)
+  const listenRef = useRef<{ cancel: () => void } | null>(null)
+  const editedDuringListen = useRef(false)
 
   useEffect(() => {
     if (!supabase) return
@@ -55,6 +71,14 @@ export function MerchantPanel({ provider, onProviderChange }: Props) {
         const nextUserId = next?.user.id ?? null
         if (sessionUserRef.current !== nextUserId) {
           sessionUserRef.current = nextUserId
+          listenEpoch.current += 1
+          listeningRef.current = false
+          consentRef.current = false
+          listenRef.current?.cancel()
+          listenRef.current = null
+          setListening(false)
+          setConsentOpen(false)
+          setConfirmReal(false)
           setOrders([])
           setStallVerified(false)
           setLastCreatedId(null)
@@ -66,6 +90,29 @@ export function MerchantPanel({ provider, onProviderChange }: Props) {
     })
     return () => { mounted = false; data.subscription.unsubscribe() }
   }, [])
+
+  useEffect(() => {
+    let active = true
+    void detectSpeechMode().then((mode) => {
+      if (active) setSpeechMode(mode)
+    })
+    return () => { active = false }
+  }, [])
+
+  useEffect(() => () => {
+    listenEpoch.current += 1
+    listeningRef.current = false
+    listenRef.current?.cancel()
+    listenRef.current = null
+  }, [])
+
+  useEffect(() => {
+    if (listening) document.getElementById('dictate-cancel')?.focus()
+  }, [listening])
+
+  useEffect(() => {
+    if (consentOpen) document.getElementById('dictate-accept')?.focus()
+  }, [consentOpen])
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 1000)
@@ -117,6 +164,73 @@ export function MerchantPanel({ provider, onProviderChange }: Props) {
     setBusy(false)
   }
 
+  function stopCapture() {
+    const wasListening = listeningRef.current
+    listenEpoch.current += 1
+    listeningRef.current = false
+    consentRef.current = false
+    const active = listenRef.current
+    listenRef.current = null
+    active?.cancel()
+    setListening(false)
+    setConsentOpen(false)
+    if (wasListening) setVoiceNote('Dictado cancelado. Puedes escribir el importe.')
+  }
+
+  function beginListen() {
+    if (!session || !stallVerified || listeningRef.current || speechMode === 'checking' || speechMode === 'none') return
+    const epoch = listenEpoch.current + 1
+    listenEpoch.current = epoch
+    listeningRef.current = true
+    consentRef.current = false
+    editedDuringListen.current = false
+    setListening(true)
+    setConsentOpen(false)
+    setConfirmReal(false)
+    setVoiceNote('Escuchando…')
+    const handle = listenOnce(window as unknown as SpeechHost, {
+      local: speechMode === 'local',
+      onFinal: (transcript) => {
+        if (epoch !== listenEpoch.current || editedDuringListen.current) return
+        const parsed = parseSpokenAmount(transcript)
+        if (!parsed.ok) {
+          setVoiceNote(parsed.message)
+          return
+        }
+        setAmount(centsToField(parsed.cents))
+        setAmountSource('spoken')
+        setReviewCents(parsed.cents)
+        setConfirmReal(false)
+        setVoiceNote(
+          parsed.mentionsCash && methodRef.current !== 'cash'
+            ? 'La frase menciona efectivo. El método sigue igual. Elige Efectivo si quieres cambiarlo.'
+            : '',
+        )
+      },
+      onError: (message) => {
+        if (epoch !== listenEpoch.current) return
+        if (message) setVoiceNote(message)
+      },
+      onEnd: () => {
+        if (epoch !== listenEpoch.current) return
+        listeningRef.current = false
+        setListening(false)
+        setVoiceNote((current) => current === 'Escuchando…' ? 'No se escuchó un importe. Puedes dictarlo otra vez o escribirlo.' : current)
+      },
+    })
+    listenRef.current = handle
+  }
+
+  function dictate() {
+    if (!session || !stallVerified || busy || listeningRef.current) return
+    if (speechMode === 'remote') {
+      consentRef.current = true
+      setConsentOpen(true)
+      return
+    }
+    if (speechMode === 'local') beginListen()
+  }
+
   async function refreshOrders() {
     try {
       const result = await merchantOrders(provider)
@@ -128,6 +242,10 @@ export function MerchantPanel({ provider, onProviderChange }: Props) {
   }
 
   async function submitOrder() {
+    if (listeningRef.current || consentRef.current) {
+      setActionMessage('Termina o cancela el dictado antes de crear la orden.')
+      return
+    }
     if (!stallVerified || busy) return
     const cents = parseMoney(amount)
     if (cents === null) {
@@ -152,12 +270,16 @@ export function MerchantPanel({ provider, onProviderChange }: Props) {
     localStorage.setItem(intentStorage(provider), JSON.stringify(intent))
     setBusy(true)
     setActionMessage('Creando orden en el servidor…')
+    const source = amountSource === 'spoken' && reviewCents === cents ? 'spoken' : 'manual'
     try {
-      const created = await createOrder(provider, cents, method, intent.key)
+      const created = await createOrder(provider, cents, method, intent.key, source)
       localStorage.removeItem(intentStorage(provider))
       setOrders((old) => [created, ...old.filter((order) => order.orderId !== created.orderId)])
       setLastCreatedId(created.orderId)
       setAmount('')
+      setAmountSource('manual')
+      setReviewCents(null)
+      setVoiceNote('')
       setConfirmReal(false)
       setActionMessage(
         created.state === 'PAID_CASH'
@@ -252,14 +374,18 @@ export function MerchantPanel({ provider, onProviderChange }: Props) {
             <CardTitle className="text-2xl">Prepara el siguiente cobro</CardTitle>
             <CardDescription>El importe queda visible para el cliente; la palabra se queda contigo.</CardDescription>
           </div>
-          <Button variant="ghost" size="sm" onClick={() => supabase?.auth.signOut({ scope: 'local' })}>Salir</Button>
+          <Button variant="ghost" size="sm" onClick={() => { stopCapture(); void supabase?.auth.signOut({ scope: 'local' }) }}>Salir</Button>
         </CardHeader>
         <CardContent className="merchant-panel__body">
           {onProviderChange && (
             <div className="provider-picker">
               <span>Proveedor del puesto</span>
               <ToggleGroup type="single" value={provider} onValueChange={(value) => {
-                if (value === 'mock' || value === 'pey') onProviderChange(value)
+                if (value === 'mock' || value === 'pey') {
+                  stopCapture()
+                  setConfirmReal(false)
+                  onProviderChange(value)
+                }
               }} variant="outline" aria-label="Proveedor del puesto">
                 <ToggleGroupItem value="mock" aria-label="Puesto de prueba">Mock</ToggleGroupItem>
                 <ToggleGroupItem value="pey" aria-label="Puesto Pey real">Pey real</ToggleGroupItem>
@@ -283,17 +409,59 @@ export function MerchantPanel({ provider, onProviderChange }: Props) {
                   autoComplete="off"
                   placeholder="45.00"
                   value={amount}
-                  onChange={(event) => { setAmount(event.target.value); setConfirmReal(false) }}
-                  aria-describedby="amount-help"
+                  onChange={(event) => {
+                    editedDuringListen.current = true
+                    setAmount(event.target.value)
+                    setAmountSource('manual')
+                    setReviewCents(null)
+                    setConfirmReal(false)
+                  }}
+                  aria-describedby={reviewCents != null && amountSource === 'spoken' ? 'amount-help voice-review' : 'amount-help'}
                 />
                 <span aria-hidden="true">MXN</span>
               </div>
               <p id="amount-help" className="field-hint">Usa hasta dos decimales. El servidor valida el límite permitido.</p>
+              <div className="voice-block">
+                {speechMode === 'none' && <p className="voice-note">Este navegador no dicta importes. Escribe el monto.</p>}
+                {speechMode !== 'none' && speechMode !== 'checking' && (
+                  listening ? (
+                    <Button id="dictate-cancel" type="button" variant="outline" className="voice-dictate" onClick={stopCapture}>
+                      Cancelar dictado
+                    </Button>
+                  ) : (
+                    <Button type="button" variant="outline" className="voice-dictate" onClick={dictate} disabled={!stallVerified || busy}>
+                      Dictar importe
+                    </Button>
+                  )
+                )}
+                {consentOpen && (
+                  <Alert>
+                    <CircleAlert aria-hidden="true" />
+                    <AlertTitle>Dictado del navegador</AlertTitle>
+                    <AlertDescription>El navegador puede enviar tu voz a su servicio de reconocimiento. No guardamos audio ni transcripciones. También puedes escribir el importe.</AlertDescription>
+                    <div className="voice-actions">
+                      <Button id="dictate-accept" type="button" onClick={beginListen}>Aceptar y dictar</Button>
+                      <Button type="button" variant="outline" onClick={() => { consentRef.current = false; setConsentOpen(false); document.getElementById('order-amount')?.focus() }}>Escribir el importe</Button>
+                    </div>
+                  </Alert>
+                )}
+                <p className="voice-note" role="status" aria-live="polite">{listening ? 'Escuchando…' : voiceNote}</p>
+                {reviewCents != null && amountSource === 'spoken' && (
+                  <p className="voice-review" id="voice-review" role="status">
+                    <strong>{money(reviewCents)} MXN</strong>
+                    <span>Revisa el importe antes de continuar.</span>
+                  </p>
+                )}
+              </div>
             </Field>
             <Field>
               <FieldLabel>Método de pago</FieldLabel>
               <ToggleGroup type="single" value={method} onValueChange={(value) => {
-                if (value === 'codi' || value === 'cash') setMethod(value)
+                if (value === 'codi' || value === 'cash') {
+                  methodRef.current = value
+                  setMethod(value)
+                  setConfirmReal(false)
+                }
               }} variant="outline" aria-label="Método de pago">
                 <ToggleGroupItem value="codi" aria-label="Pago CoDi">CoDi</ToggleGroupItem>
                 <ToggleGroupItem value="cash" aria-label="Pago en efectivo">Efectivo</ToggleGroupItem>
@@ -307,11 +475,11 @@ export function MerchantPanel({ provider, onProviderChange }: Props) {
               <AlertDescription>Esta acción consulta Pey. El pago solo ocurre si alguien autoriza la transferencia en su banco.</AlertDescription>
               <div className="real-confirmation__actions">
                 <Button variant="outline" onClick={() => setConfirmReal(false)}>Volver</Button>
-                <Button onClick={submitOrder} disabled={busy || !stallVerified}>Confirmar y generar QR</Button>
+                <Button onClick={submitOrder} disabled={busy || !stallVerified || listening || consentOpen}>Confirmar y generar QR</Button>
               </div>
             </Alert>
           ) : (
-            <Button size="lg" className="create-button" onClick={submitOrder} disabled={busy || !stallVerified}>
+            <Button size="lg" className="create-button" onClick={submitOrder} disabled={busy || !stallVerified || listening || consentOpen}>
               {busy ? 'Espera…' : method === 'cash' ? 'Registrar efectivo' : provider === 'pey' ? 'Preparar QR real' : 'Crear orden de prueba'}
               {!busy && <ArrowRight aria-hidden="true" />}
             </Button>
