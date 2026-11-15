@@ -87,7 +87,7 @@ export function ModeGuide() {
             <p className="mode-card__tag"><BanknoteArrowUp aria-hidden="true" /> Demo simulada</p>
             <h3>Sin dinero real</h3>
             <p>
-              MockProvider genera un QR marcado como simulado y un botón de pago de prueba. Es la forma segura de recorrer el flujo completo.
+              El recorrido público muestra las dos pantallas y simula un QR y un pago en tu navegador. Puedes completarlo sin iniciar sesión ni mover dinero.
             </p>
             <Link className="mode-card__link" to="/demo">Abrir la demo <ArrowRight aria-hidden="true" /></Link>
           </article>

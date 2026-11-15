@@ -1,31 +1,26 @@
-# Plan de demo
+# Recorrido de HeyPEY para el jurado
 
-## Recorrido objetivo
+La entrega se evalúa sin presentación en vivo. La entrada principal es la [demo pública](https://copiloto-zeroui.vercel.app/demo), que cualquier persona puede completar sin cuenta ni dinero.
 
-1. Abre `/demo` en Vercel e inicia sesión como comerciante con las credenciales privadas del presentador.
-2. Ingresa un monto, escrito o dictado en la vista del comerciante, y crea una orden de prueba Mock. La pantalla del cliente muestra número, monto y un QR **claramente simulado**, sin palabra secreta. El dictado solo llena el importe.
-3. El comerciante recibe en su vista privada la palabra asignada a esa orden.
-4. `MockProvider` emite un evento de pago de prueba; el servidor valida monto, referencia e idempotencia.
-5. Solo entonces la orden pasa a `PAID` y la vista pública anuncia número más palabra.
-6. Se repite con una segunda orden para demostrar palabras distintas y se prueba un evento duplicado para mostrar que no se anuncia dos veces.
+## Prueba autoguiada
 
-## Alcance de la demo web
+1. En la vista **Comerciante**, deja `0.01` o escribe otro importe con hasta dos decimales. En un navegador compatible, pulsa **Activar HeyPEY**, acepta el aviso y di «HeyPEY, cóbrale un centavo». El importe aparece en el campo, pero todavía no hay orden.
+2. Pulsa **Crear cobro de ejemplo**. El comerciante ve la palabra privada. La vista **Cliente** muestra el importe y un QR ilustrativo, sin palabra.
+3. Pulsa **Simular pago**. Ahora el cliente ve la misma palabra. **Reiniciar recorrido** permite repetir la prueba.
 
-- Backend: esquema de órdenes, selección de palabras, `MockProvider`, endpoint para crear orden y endpoint de pago simulado.
-- Web: `/demo` muestra comerciante y cliente lado a lado para el jurado. En dos dispositivos, `/comerciante` muestra solo la vista privada y `/cliente` solo la pública, sin credenciales. El modo Mock indica **sin dinero real**.
-- Estados mínimos: `CREATING`, `AWAITING_PAYMENT`, `PAID`, `PAID_CASH`, `EXPIRED`, `CANCELLED` y `FAILED`.
-- Pruebas: evento duplicado, monto distinto, cancelación, dos órdenes activas y palabra no expuesta antes de pagar.
+El QR de esta ruta no es válido para pagar. El recorrido ocurre solo en el navegador: no crea órdenes en Supabase y no llama a Pey. El botón de voz necesita permiso de micrófono y la pestaña debe permanecer visible. Escribir el importe siempre funciona como alternativa.
 
-Pey ya confirmó una transferencia real de $0.01 por webhook y la palabra pública coincidió. `/comerciante?modo=pey` permite preparar un QR real después de iniciar sesión y confirmar dos veces; no es necesario cobrar de nuevo para mostrar la demo Mock. La entrada de voz, el hardware Bluetooth y Android siguen pendientes.
+## Cómo se relaciona con el backend
 
-## Criterios para decir “demo lista”
+| Modo | Acceso | Qué prueba |
+|---|---|---|
+| `/demo`, recorrido inicial | Público | Interacción de comerciante y cliente, importe por voz o teclado, palabra oculta y revelación tras el pago simulado. Es una simulación local. |
+| `/demo` → **Abrir prueba conectada** | Cuenta privada del comerciante | MockProvider, órdenes reales en Supabase, evento de pago simulado y palabra liberada por el servidor. No mueve dinero. |
+| `/cliente?modo=pey` | Público, solo lectura | Estado que devuelve el backend Pey. No inicia pagos. |
+| `/comerciante?modo=pey` | Cuenta privada del comerciante | Puede generar un QR bancario real después de una segunda confirmación. No hace falta usarlo para evaluar la entrega. |
 
-- El despliegue de Vercel abre sin errores desde una URL pública.
-- El presentador inicia sesión como comerciante; el jurado puede abrir la vista del cliente sin credenciales.
-- La vista del cliente nunca contiene la palabra antes de `PAID`.
-- Ninguna acción del navegador puede marcar un pago real como confirmado.
-- El README indica qué funciona, qué es simulado y qué falta.
+El backend Pey ya confirmó **una transferencia real de $0.01** por webhook, y la palabra pública coincidió con la privada. Un QR anterior venció sin pago; no cuenta como prueba exitosa. El flujo Mock alojado pasó 19 comprobaciones. Las devoluciones, un segundo cobro y una conciliación Pey sin webhook no se han probado.
 
-## Pendientes por verificar antes de producción
+## Principio que se evalúa
 
-Devoluciones, un segundo cobro y una conciliación Pey sin webhook; sintaxis vigente de Supabase Realtime Authorization; calidad y latencia de audio Bluetooth; licencia de componentes de voz; privacidad de voz en espacios públicos.
+En el sistema conectado, el navegador no decide que un pago fue confirmado. El servidor verifica el evento y el pago con el proveedor; solo entonces permite publicar la palabra. La demo local ilustra ese orden visualmente y se identifica como simulación en la pantalla.

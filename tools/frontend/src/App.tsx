@@ -1,8 +1,10 @@
+import { useState } from 'react'
 import { Link, NavLink, Route, Routes, useSearchParams } from 'react-router-dom'
 import { ArrowRight, Eye, LockKeyhole } from 'lucide-react'
 import BlurText from '@/components/BlurText'
 import { CustomerPanel } from '@/components/CustomerPanel'
 import { CounterFlow, ModeGuide } from '@/components/HomeSections'
+import { JudgeDemo } from '@/components/JudgeDemo'
 import { MerchantPanel } from '@/components/MerchantPanel'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -35,7 +37,7 @@ function Home() {
             <Button size="lg" asChild><Link to="/demo">Probar la demo sin dinero <ArrowRight aria-hidden="true" /></Link></Button>
             <Button size="lg" variant="outline" asChild><Link to="/cliente">Ver pantalla del cliente</Link></Button>
           </div>
-          <p className="hero__fineprint">La demo usa MockProvider y no mueve dinero. Pey ya se probó con una transferencia real de $0.01 confirmada por webhook. En navegadores compatibles, el comerciante puede activar HeyPEY mientras esta pestaña esté abierta; el importe se revisa antes de crear una orden. Android, Bluetooth y el reconocimiento local propio siguen pendientes.</p>
+          <p className="hero__fineprint">El recorrido público simula el pago en este navegador y no mueve dinero. La prueba conectada usa MockProvider y pide acceso de comerciante. Pey ya se probó con una transferencia real de $0.01 confirmada por webhook. En navegadores compatibles puedes activar HeyPEY mientras la pestaña esté abierta; el importe se revisa antes de crear una orden.</p>
         </div>
         <div className="hero__preview">
           <CustomerPanel provider="mock" compact />
@@ -49,8 +51,31 @@ function Home() {
 
 function Workspace({ mockOnly }: { mockOnly?: boolean }) {
   const [params, setParams] = useSearchParams()
+  const [showConnected, setShowConnected] = useState(false)
   const provider: Provider = mockOnly ? 'mock' : params.get('modo') === 'pey' ? 'pey' : 'mock'
   const changeProvider = (next: Provider) => setParams(next === 'pey' ? { modo: 'pey' } : {})
+  if (mockOnly) return <main id="contenido" className="workspace">
+    <JudgeDemo />
+    <section className="connected-demo" aria-labelledby="connected-demo-title">
+      <div>
+        <h2 id="connected-demo-title">Prueba conectada al backend</h2>
+        <p>Esta versión usa el servidor y MockProvider. Crear órdenes requiere la cuenta privada del comerciante; el recorrido de arriba funciona sin acceso.</p>
+        <Button variant="outline" onClick={() => setShowConnected(value => !value)} aria-expanded={showConnected} aria-controls="connected-demo-content">
+          {showConnected ? 'Cerrar prueba conectada' : 'Abrir prueba conectada'}
+        </Button>
+      </div>
+      {showConnected && <div id="connected-demo-content" className="workspace__grid connected-demo__screens">
+        <section className="side side--private" aria-labelledby="side-private">
+          <p className="side__bar" id="side-private"><LockKeyhole aria-hidden="true" /> Lado del comerciante · privado</p>
+          <MerchantPanel provider="mock" />
+        </section>
+        <section className="side side--public" aria-labelledby="side-public">
+          <p className="side__bar" id="side-public"><Eye aria-hidden="true" /> Lado del cliente · público</p>
+          <CustomerPanel provider="mock" />
+        </section>
+      </div>}
+    </section>
+  </main>
   return <main id="contenido" className={mockOnly ? 'workspace' : 'workspace workspace--merchant'}>
     <div className="workspace__intro">
       <div>
@@ -89,7 +114,7 @@ function CustomerPage() {
 }
 
 function Footer() {
-  return <footer className="site-footer"><div className="site-footer__inner"><Separator /><div><span>HeyPEY</span><span>Demo web: MockProvider · Pey: pago real verificado · Voz en la pestaña activa de navegadores compatibles · Android, Bluetooth y reconocimiento local propio: pendientes</span></div></div></footer>
+  return <footer className="site-footer"><div className="site-footer__inner"><Separator /><div><span>HeyPEY</span><span>Recorrido público: simulación local · Prueba conectada: MockProvider con acceso · Pey: pago real verificado · Android y Bluetooth: pendientes</span></div></div></footer>
 }
 
 export default function App() {

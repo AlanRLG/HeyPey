@@ -2,6 +2,16 @@
 
 Proyecto para el hack de Cursor. El producto permite a un comerciante preparar cobros y confirmar pagos con una **palabra secreta de un solo uso**. La prueba del pago viene de un evento verificado por el servidor. En la web, el comerciante puede dictar el importe o activar HeyPEY para empezar a dictarlo con una frase; Android y el reconocimiento local propio siguen pendientes.
 
+## Para el jurado: prueba sin cuenta y sin dinero
+
+Abre **[la demo pública de HeyPEY](https://copiloto-zeroui.vercel.app/demo)**. Funciona por sí sola; no necesitas credenciales ni hacer una transferencia.
+
+1. En la pantalla del comerciante, deja **0.01** o escribe otro importe con hasta dos decimales. En Chrome también puedes pulsar **Activar HeyPEY**, aceptar el aviso del micrófono y decir «HeyPEY, cóbrale un centavo». Revisa el importe que aparece.
+2. Pulsa **Crear cobro de ejemplo**. El comerciante recibe una palabra privada; el cliente ve el importe y un QR claramente marcado como simulado, pero todavía **no ve la palabra**.
+3. Pulsa **Simular pago**. Ahora la pantalla del cliente revela la misma palabra. Usa **Reiniciar recorrido** para repetirlo.
+
+Esta ruta es una **simulación local e interactiva** del producto: no crea órdenes en Supabase, no llama a Pey y el QR no sirve para pagar. La [pantalla pública conectada a Pey](https://copiloto-zeroui.vercel.app/cliente?modo=pey) permite ver el estado que entrega el servidor. Una transferencia real de $0.01 ya se verificó por webhook; las evidencias y límites técnicos están más abajo. La prueba conectada a MockProvider permanece dentro de `/demo`, en **Abrir prueba conectada**, y requiere la cuenta privada del comerciante. No publicamos esa contraseña.
+
 ## Estado
 
 **Nivel 1 verificado en Supabase con MockProvider, y una orden pey de $0.01 ya cobrada.** Las migraciones `0006`–`0009` y las funciones `orders`, `webhooks`, `reconcile`, `mock-pay`, `public-orders`, `catalog` y `summary` están desplegadas. `tools/test/e2e_mock_remote.mjs` pasó **19/19** comprobaciones del flujo Mock. El cron `reconcile-orders` respondió HTTP 200. El puesto demo sigue en `mock`. El puesto pey `343eff54-061f-434c-b0fd-2611c058092d` deja `provider_account_ref` en null: al omitir `bankAccountId`, el cobro usa la cuenta CoDi ligada a la API key.
@@ -20,7 +30,7 @@ La prueba que cuenta es una sola orden de $0.01: pasó a `PAID` porque el webhoo
 
 El despliegue en la nube se describe en [DEPLOY.md](DEPLOY.md). La nueva interfaz React vive en `tools/frontend/`; su `public/config.js` contiene únicamente la URL de Supabase, la clave pública `anon` y los IDs públicos de los puestos Mock y Pey. El comerciante inicia sesión para crear órdenes; la vista del cliente consulta `public-orders` sin sesión. Para el Mock alojado, define `TEST_STALL_ID` con el UUID del puesto demo y ejecuta `node tools/test/e2e_mock_remote.mjs`. `node tools/test/e2e_pey_remote.mjs` solo lee; crear un QR pide la frase `CREAR QR DE UN CENTAVO` y reutiliza la clave de `tools/test/.pey-cent/`, carpeta ignorada por Git. Esa carpeta no se versiona. Ninguno de los dos scripts guarda ni imprime la contraseña ni el JWT.
 
-Frontend: [copiloto-zeroui.vercel.app](https://copiloto-zeroui.vercel.app/) (al publicar este commit: `/demo` muestra ambas vistas lado a lado; `/comerciante` muestra solo la vista privada y ofrece Mock y Pey después de iniciar sesión; `/cliente` muestra solo la vista pública). En dos dispositivos, abre `/comerciante` en el del vendedor y `/cliente` en el que mira el comprador, con el mismo proveedor seleccionado. La demo predeterminada usa Mock y no mueve dinero; generar un QR real de Pey exige una segunda confirmación. Los cambios en `main` se despliegan automáticamente con Vercel.
+Frontend: [copiloto-zeroui.vercel.app](https://copiloto-zeroui.vercel.app/) (`/demo` ofrece el recorrido público guiado y, aparte, una prueba conectada que requiere acceso; `/comerciante` muestra solo la vista privada y ofrece Mock y Pey después de iniciar sesión; `/cliente` muestra solo la vista pública). En dos dispositivos, abre `/comerciante` en el del vendedor y `/cliente` en el que mira el comprador, con el mismo proveedor seleccionado. Generar un QR real de Pey exige una segunda confirmación. Los cambios en `main` se despliegan automáticamente con Vercel.
 
 ### Pagos tardíos, fallas y devoluciones
 
