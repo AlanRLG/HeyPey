@@ -21,6 +21,18 @@ test('convierte totales dichos después de Cóbrale', () => {
   assert.equal(cents('Cóbrale 0.01'), 1)
 })
 
+test('acepta centavos dichos y hasta dos decimales', () => {
+  assert.equal(cents('Cóbrale un centavo'), 1)
+  assert.equal(cents('Cóbrale cincuenta centavos'), 50)
+  assert.equal(cents('Cóbrale cero pesos con un centavo'), 1)
+  assert.equal(cents('Cóbrale 240 pesos con 50 centavos'), 24050)
+  assert.equal(cents('Cóbrale doscientos cuarenta pesos con cinco centavos'), 24005)
+  assert.equal(cents('Cóbrale cero punto cero uno'), 1)
+  assert.equal(cents('Cóbrale 240 punto cincuenta'), 24050)
+  assert.equal(cents('Cóbrale 240 punto cero cinco'), 24005)
+  assert.equal(cents('Cóbrale 0,01 pesos'), 1)
+})
+
 test('marca efectivo sin convertirlo en el método de pago', () => {
   const parsed = parseSpokenAmount('Cóbrale doscientos en efectivo')
   assert.equal(parsed.ok, true)
@@ -39,6 +51,10 @@ test('rechaza frases ambiguas, de productos o sin activación', () => {
   assert.equal(parseSpokenAmount('Cóbrale ciento').reason, 'incomplete')
   assert.equal(parseSpokenAmount('Cóbrale cero').reason, 'invalid')
   assert.equal(parseSpokenAmount('Cóbrale 12.345').reason, 'invalid')
+  assert.equal(parseSpokenAmount('Cóbrale 100 centavos').reason, 'invalid')
+  assert.equal(parseSpokenAmount('Cóbrale cero centavos').reason, 'invalid')
+  assert.equal(parseSpokenAmount('Cóbrale 0.001 pesos').reason, 'invalid')
+  assert.equal(parseSpokenAmount('Cóbrale un centavo con cinco').reason, 'ambiguous')
   assert.equal(parseSpokenAmount('Cóbrale -5').reason, 'invalid')
 })
 

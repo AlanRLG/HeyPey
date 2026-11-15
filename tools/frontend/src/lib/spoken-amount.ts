@@ -34,6 +34,7 @@ const HUNDREDS: Record<string, number> = {
   quinientos: 500, seiscientos: 600, setecientos: 700, ochocientos: 800, novecientos: 900,
 }
 const CURRENCY = new Set(['peso', 'pesos', 'mxn', 'mexicanos'])
+const CENTS = new Set(['centavo', 'centavos'])
 const PRODUCTS = new Set([
   'kilo', 'kilos', 'kg', 'gramo', 'gramos', 'pieza', 'piezas',
   'litro', 'litros', 'manojo', 'manojos', 'docena', 'docenas', 'pechuga', 'cilantro',
@@ -118,6 +119,9 @@ function afterMil(tokens: string[], index: number, base: number): Read {
 }
 
 function readPesos(tokens: string[], index: number): Read {
+  if (/^\d{3,6}$/.test(tokens[index] ?? '')) {
+    return { value: Number(tokens[index]), next: index + 1 }
+  }
   const head = readUnder1000(tokens, index)
   if (head && 'error' in head) return head
   if (head && tokens[head.next] === 'mil') {
@@ -133,6 +137,28 @@ function consumeCurrency(tokens: string[], index: number): number {
   let next = index
   while (CURRENCY.has(tokens[next] ?? '')) next += 1
   return next
+}
+
+function readDecimal(tokens: string[], index: number): Read {
+  const token = tokens[index]
+  if (/^\d{1,2}$/.test(token ?? '')) {
+    return { value: Number(token.padEnd(2, '0')), next: index + 1 }
+  }
+  const digit = UNITS[token]
+  if (digit != null) {
+    const second = UNITS[tokens[index + 1]]
+    if (second != null) return { value: digit * 10 + second, next: index + 2 }
+    return { value: digit * 10, next: index + 1 }
+  }
+  const fraction = readUnder100(tokens, index)
+  if (!fraction || 'error' in fraction) return { error: 'invalid' }
+  return { value: fraction.value, next: fraction.next }
+}
+
+function finishCents(pesos: number, centavos: number): number | null {
+  const cents = pesos * 100 + centavos
+  return Number.isSafeInteger(cents) && cents > 0 &&
+    parseMoney(centsToField(cents)) === cents ? cents : null
 }
 
 function hasProductTalk(tokens: string[]): boolean {
@@ -172,7 +198,15 @@ export function parseSpokenAmount(transcript: string): SpokenAmount {
   if (['son', 'seria', 'serian'].includes(rest[0] ?? '')) rest = rest.slice(1)
   if (!rest.length) return fail('incomplete')
 
-  if (/^\d{1,6}(?:[.,]\d{1,2})?$/.test(rest[0])) {
+  const onlyCents = readUnder100(rest, 0)
+  if (onlyCents && !('error' in onlyCents) && CENTS.has(rest[onlyCents.next] ?? '')) {
+    if (onlyCents.value < 1 || onlyCents.value > 99) return fail('invalid')
+    const extra = leftover(rest, onlyCents.next + 1)
+    if (extra) return extra
+    return { ok: true, cents: onlyCents.value, mentionsCash: pulled.mentionsCash }
+  }
+
+  if (/^\d{1,6}\.\d{1,2}$/.test(rest[0])) {
     const cents = parseMoney(rest[0])
     if (cents == null) return fail('invalid')
     const next = consumeCurrency(rest, 1)
@@ -185,18 +219,25 @@ export function parseSpokenAmount(transcript: string): SpokenAmount {
   const pesos = readPesos(rest, 0)
   if ('error' in pesos) return fail(pesos.error)
   let next = consumeCurrency(rest, pesos.next)
-  let cents = pesos.value * 100
+  let fraction = 0
   if (rest[next] === 'con') {
     if (!isSmall(rest[next + 1])) return fail('incomplete')
-    const fraction = readUnder100(rest, next + 1)
-    if ('error' in fraction) return fail(fraction.error)
-    if (fraction.value > 99) return fail('invalid')
-    cents += fraction.value
-    next = consumeCurrency(rest, fraction.next)
+    const spokenCents = readUnder100(rest, next + 1)
+    if ('error' in spokenCents) return fail(spokenCents.error)
+    if (spokenCents.value > 99) return fail('invalid')
+    fraction = spokenCents.value
+    next = spokenCents.next
+    if (CENTS.has(rest[next] ?? '')) next += 1
+    else next = consumeCurrency(rest, next)
+  } else if (rest[next] === 'punto' || rest[next] === 'coma') {
+    const decimal = readDecimal(rest, next + 1)
+    if ('error' in decimal) return fail(decimal.error)
+    fraction = decimal.value
+    next = consumeCurrency(rest, decimal.next)
   }
   const extra = leftover(rest, next)
   if (extra) return extra
-  if (!Number.isSafeInteger(cents) || cents <= 0) return fail('invalid')
-  if (parseMoney(centsToField(cents)) !== cents) return fail('invalid')
+  const cents = finishCents(pesos.value, fraction)
+  if (cents == null) return fail('invalid')
   return { ok: true, cents, mentionsCash: pulled.mentionsCash }
 }

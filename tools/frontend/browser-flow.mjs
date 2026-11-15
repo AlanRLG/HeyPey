@@ -210,6 +210,12 @@ if (spokenPost.amountSource !== 'spoken' || spokenPost.amountCents !== 24000 || 
   throw new Error('La orden dictada no salió como spoken sin transcripción')
 }
 
+await page.evaluate((final) => { window.__speechNext = { final } }, 'Cóbrale un centavo')
+await page.getByRole('button', { name: 'Dictar importe' }).click()
+await expect(page.locator('#voice-review')).toContainText('0.01')
+await expect(page.getByLabel('Importe en pesos mexicanos')).toHaveValue('0.01')
+if (state.posts.length !== postsBeforeVoice + 1) throw new Error('Dictar un centavo creó una orden')
+
 await page.evaluate((final) => { window.__speechNext = { final } }, 'Cóbrale doscientos')
 await page.getByRole('button', { name: 'Dictar importe' }).click()
 await expect(page.getByLabel('Importe en pesos mexicanos')).toHaveValue('200.00')
