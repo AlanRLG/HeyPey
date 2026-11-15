@@ -20,6 +20,8 @@ import type {
 
 const MIN_EXPIRATION_S = 360;
 const DEFAULT_BASE = "https://api.pey.mx";
+const PEY_ACCOUNT_ID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+const CLABE = /^\d{18}$/;
 
 export interface PeyOptions {
   fetch?: typeof fetch;
@@ -61,6 +63,82 @@ function orderIdFromMetadata(metadata: unknown): string | null {
   return typeof record.orderId === "string" && record.orderId ? record.orderId : null;
 }
 
+export class PeyPaymentRejected extends Error {
+  readonly reason: string;
+  constructor(reason: string) {
+    super(reason);
+    this.name = "PeyPaymentRejected";
+    this.reason = reason;
+  }
+}
+
+export class PeyUnavailable extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PeyUnavailable";
+  }
+}
+
+/** ULID del puesto, si no el fallback del secreto, si no la cuenta CoDi de la API key. Nunca una CLABE. */
+export function peyBankAccountId(accountRef: string | null, fallback: string | null): string | null {
+  if (accountRef && CLABE.test(accountRef)) throw new Error("pey_account_ref_not_clabe");
+  if (accountRef) {
+    if (!PEY_ACCOUNT_ID.test(accountRef)) throw new Error("pey_account_ref_invalid");
+    return accountRef;
+  }
+  if (fallback && CLABE.test(fallback)) throw new Error("pey_account_ref_not_clabe");
+  if (fallback) {
+    if (!PEY_ACCOUNT_ID.test(fallback)) throw new Error("pey_account_ref_invalid");
+    return fallback;
+  }
+  return null;
+}
+
+export interface PeyTransactionExpect {
+  transactionId: string;
+  chargeId: string;
+  orderId: string;
+  amountCents: number;
+}
+
+export type PeyTransactionAssessment =
+  | { ok: true; payment: VerifiedPayment }
+  | { ok: false; kind: "unavailable"; reason: string }
+  | { ok: false; kind: "rejected"; reason: string };
+
+function externalOrderId(metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== "object") return null;
+  const external = (metadata as Record<string, unknown>).externalMetadata;
+  if (!external || typeof external !== "object") return null;
+  const orderId = (external as Record<string, unknown>).orderId;
+  return typeof orderId === "string" && orderId ? orderId : null;
+}
+
+/** GET /transaction/{id}: todos los campos documentados tienen que coincidir. Uno ausente no paga. */
+export function assessPeyTransaction(row: Record<string, unknown>, expected: PeyTransactionExpect): PeyTransactionAssessment {
+  if (row.status !== "PAID") return { ok: false, kind: "unavailable", reason: "not_paid" };
+  if (row.id !== expected.transactionId) return { ok: false, kind: "rejected", reason: "transaction_mismatch" };
+  if (row.payableType !== "API_CODI_QR") return { ok: false, kind: "rejected", reason: "payable_type_mismatch" };
+  if (row.payableId !== expected.chargeId) return { ok: false, kind: "rejected", reason: "qr_mismatch" };
+  if (row.paymentMethod !== "CODI") return { ok: false, kind: "rejected", reason: "method_mismatch" };
+  if (row.currency !== "MXN") return { ok: false, kind: "rejected", reason: "currency_mismatch" };
+  const cents = pesosToCents(typeof row.amount === "number" ? row.amount : Number.NaN);
+  if (cents == null) return { ok: false, kind: "rejected", reason: "amount_mismatch" };
+  if (cents !== expected.amountCents) return { ok: false, kind: "rejected", reason: "amount_mismatch" };
+  const orderId = externalOrderId(row.metadata);
+  if (orderId !== expected.orderId) return { ok: false, kind: "rejected", reason: "reference_mismatch" };
+  return {
+    ok: true,
+    payment: {
+      chargeId: expected.chargeId,
+      transactionId: expected.transactionId,
+      amountCents: cents,
+      trackingKey: trackingFromMetadata(row.metadata),
+      reference: orderId,
+    },
+  };
+}
+
 function trackingFromMetadata(metadata: unknown): string | null {
   if (!metadata || typeof metadata !== "object") return null;
   const key = (metadata as Record<string, unknown>).trackingKey;
@@ -99,29 +177,43 @@ export function createPeyProvider(options: PeyOptions = {}): PaymentProvider {
     };
   }
 
-  async function paymentByTransaction(chargeId: string, transactionId: string): Promise<VerifiedPayment | null> {
-    const res = await peyFetch(`/transaction/${encodeURIComponent(transactionId)}`);
-    if (res.status === 404) return null;
-    if (!res.ok) throw new Error(`pey_transaction_${res.status}`);
-    const row = await res.json() as Record<string, unknown>;
-    if (row.status !== "PAID" || row.id !== transactionId) return null;
-    if (row.payableType != null && row.payableType !== "API_CODI_QR") return null;
-    if (row.payableId !== chargeId) return null;
-    return paymentFromRow(chargeId, row);
+  function settle(assessment: PeyTransactionAssessment): VerifiedPayment {
+    if (assessment.ok) return assessment.payment;
+    if (assessment.kind === "unavailable") throw new PeyUnavailable(assessment.reason);
+    throw new PeyPaymentRejected(assessment.reason);
   }
 
-  async function paymentsForQr(chargeId: string): Promise<VerifiedPayment[]> {
+  async function paymentByTransaction(
+    chargeId: string,
+    transactionId: string,
+    expected: { orderId: string; amountCents: number },
+  ): Promise<VerifiedPayment> {
+    const res = await peyFetch(`/transaction/${encodeURIComponent(transactionId)}`);
+    if (res.status === 404 || res.status >= 500) throw new PeyUnavailable(`pey_transaction_${res.status}`);
+    if (!res.ok) throw new PeyUnavailable(`pey_transaction_${res.status}`);
+    const row = await res.json() as Record<string, unknown>;
+    return settle(assessPeyTransaction(row, {
+      transactionId,
+      chargeId,
+      orderId: expected.orderId,
+      amountCents: expected.amountCents,
+    }));
+  }
+
+  async function paymentsForQr(chargeId: string, orderId: string): Promise<VerifiedPayment[]> {
     const found: VerifiedPayment[] = [];
     let token: string | null = null;
+    let pendingForOrder = false;
     for (let page = 0; page < 5; page++) {
       const query = token ? `?nextToken=${encodeURIComponent(token)}` : "";
       const res = await peyFetch(`/transaction/codi/qr/${encodeURIComponent(chargeId)}${query}`);
-      if (res.status === 404) return found;
-      if (!res.ok) throw new Error(`pey_transactions_${res.status}`);
+      if (res.status === 404 || res.status >= 500) throw new PeyUnavailable(`pey_transactions_${res.status}`);
+      if (!res.ok) throw new PeyUnavailable(`pey_transactions_${res.status}`);
       const body = await res.json() as { items?: unknown[]; nextToken?: unknown };
       for (const item of body.items ?? []) {
         if (!item || typeof item !== "object") continue;
         const row = item as Record<string, unknown>;
+        if (row.status === "PENDING" && externalOrderId(row.metadata) === orderId) pendingForOrder = true;
         if (row.status !== "PAID") continue;
         if (typeof row.payableId === "string" && row.payableId !== chargeId) continue;
         found.push(paymentFromRow(chargeId, row));
@@ -129,18 +221,33 @@ export function createPeyProvider(options: PeyOptions = {}): PaymentProvider {
       token = typeof body.nextToken === "string" && body.nextToken ? body.nextToken : null;
       if (!token) break;
     }
+    const paidForOrder = found.some((payment) =>
+      payment.chargeId === chargeId && payment.reference === orderId && payment.transactionId
+    );
+    if (!paidForOrder && pendingForOrder) throw new PeyUnavailable("not_paid");
     return found;
   }
 
   async function getPayment(chargeId: string, selector?: PaymentSelector): Promise<VerifiedPayment | null> {
-    if (selector?.transactionId) return await paymentByTransaction(chargeId, selector.transactionId);
-    if (!selector?.orderId) return null;
-    const payments = await paymentsForQr(chargeId);
-    return selectPaymentForOrder({
+    if (selector?.transactionId) {
+      if (!selector.orderId || selector.amountCents == null) throw new PeyPaymentRejected("incomplete_selector");
+      return await paymentByTransaction(chargeId, selector.transactionId, {
+        orderId: selector.orderId,
+        amountCents: selector.amountCents,
+      });
+    }
+    if (!selector?.orderId || selector.amountCents == null) return null;
+    const payments = await paymentsForQr(chargeId, selector.orderId);
+    const chosen = selectPaymentForOrder({
       id: selector.orderId,
-      amount_cents: selector.amountCents ?? Number.NaN,
+      amount_cents: selector.amountCents,
       provider_charge_id: chargeId,
     }, payments);
+    if (!chosen) return null;
+    return await paymentByTransaction(chargeId, chosen.transactionId, {
+      orderId: selector.orderId,
+      amountCents: selector.amountCents,
+    });
   }
 
   return {
@@ -156,7 +263,8 @@ export function createPeyProvider(options: PeyOptions = {}): PaymentProvider {
         numRef: numRefForOrder(input.orderId),
         metadata: { orderId: input.orderId },
       };
-      if (bankAccountId) payload.bankAccountId = bankAccountId;
+      const account = peyBankAccountId(input.accountRef, bankAccountId);
+      if (account) payload.bankAccountId = account;
       let res: Response;
       try {
         res = await peyFetch("/codi/qr", { method: "POST", body: JSON.stringify(payload) });

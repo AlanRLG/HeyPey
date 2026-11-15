@@ -5,7 +5,7 @@
 export const RECONCILE_GRACE_MS = 20_000;
 export const RECONCILE_WINDOW_MS = 30 * 60_000;
 
-export type Probe = "settled" | "open" | "unreachable";
+export type Probe = "settled" | "open" | "unreachable" | "rejected";
 
 export interface ReconcileInput {
   state: string;
@@ -29,6 +29,13 @@ export type ReconcileAction =
     unknownSince: string;
     nextReconcileAt: string | null;
     alert: boolean;
+  }
+  | {
+    kind: "review";
+    attempts: number;
+    unknownSince: string;
+    nextReconcileAt: string;
+    alert: boolean;
   };
 
 export function backoffMs(attempt: number): number {
@@ -36,7 +43,23 @@ export function backoffMs(attempt: number): number {
   return steps * 60_000;
 }
 
+/** Hay que consultar al proveedor aunque ya exista una alerta. La alerta no demuestra que no se pagó. */
+export function shouldConsultProvider(input: Omit<ReconcileInput, "probe" | "alerted">): boolean {
+  return reconcileAction({ ...input, probe: "open", alerted: false }).kind !== "skip";
+}
+
 export function reconcileAction(input: ReconcileInput): ReconcileAction {
+  if (input.probe === "rejected") {
+    const unknownSince = input.unknownSince ?? new Date(input.nowMs).toISOString();
+    const attempts = input.attempts + 1;
+    return {
+      kind: "review",
+      attempts,
+      unknownSince,
+      nextReconcileAt: new Date(input.nowMs + backoffMs(attempts)).toISOString(),
+      alert: !input.alerted,
+    };
+  }
   if (input.alerted && input.probe !== "settled") return { kind: "skip" };
 
   const expiry = input.expiresAt ? Date.parse(input.expiresAt) : null;

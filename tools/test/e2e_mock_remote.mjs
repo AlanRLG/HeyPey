@@ -7,8 +7,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
-import { emitKeypressEvents } from 'node:readline';
-import { createInterface } from 'node:readline/promises';
+import { promptLine, promptSecret, signIn } from './remote_session.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const config = readFileSync(resolve(root, 'tools/simulator/config.js'), 'utf8');
@@ -20,37 +19,6 @@ if (!base || !anon || !stallId) {
   throw new Error('Falta TEST_STALL_ID (URL y anon key se leen de tools/simulator/config.js).');
 }
 if (!/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(stallId)) throw new Error('TEST_STALL_ID no parece UUID');
-
-async function promptLine(label) {
-  if (!process.stdin.isTTY) throw new Error('Configura TEST_EMAIL en un terminal interactivo.');
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try { return (await rl.question(label)).trim(); } finally { rl.close(); }
-}
-
-async function promptSecret(label) {
-  if (!process.stdin.isTTY || !process.stdin.setRawMode) throw new Error('Configura TEST_PASSWORD en un terminal interactivo.');
-  return new Promise((resolve, reject) => {
-    let value = '';
-    process.stdout.write(label);
-    emitKeypressEvents(process.stdin);
-    process.stdin.setRawMode(true);
-    process.stdin.resume();
-    const done = (error) => {
-      process.stdin.off('keypress', onKey);
-      process.stdin.setRawMode(false);
-      process.stdin.pause();
-      process.stdout.write('\n');
-      if (error) reject(error); else resolve(value);
-    };
-    const onKey = (char, key) => {
-      if (key?.ctrl && key.name === 'c') return done(new Error('Cancelado'));
-      if (key?.name === 'return' || key?.name === 'enter') return done();
-      if (key?.name === 'backspace') { value = value.slice(0, -1); return; }
-      if (char && !key?.ctrl && !key?.meta) value += char;
-    };
-    process.stdin.on('keypress', onKey);
-  });
-}
 
 const email = process.env.TEST_EMAIL || await promptLine('Correo de la cuenta demo: ');
 const password = process.env.TEST_PASSWORD || await promptSecret('Contraseña (no se muestra): ');
@@ -90,9 +58,7 @@ async function publicOrder(orderId) {
   return res.data.orders?.find((item) => item.orderId === orderId);
 }
 
-const login = await request(`${auth}/token?grant_type=password`, { method: 'POST', body: { email, password } });
-if (login.status !== 200 || !login.data?.access_token) throw new Error(`Inicio de sesión falló (${login.status}); comprueba la cuenta de prueba.`);
-jwt = login.data.access_token;
+jwt = await signIn(request, auth, email, password);
 check('usuario de prueba inicia sesión', true);
 
 const unauthorized = await request(`${fn}/orders?stallId=${stallId}`);

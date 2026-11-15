@@ -2,6 +2,7 @@
 // No usa la sesión del comerciante ni devuelve secretWord antes de PAID.
 import { serviceClient } from "../_shared/db.ts";
 import { json, preflight } from "../_shared/http.ts";
+import { publicStallVisible } from "../_shared/access.ts";
 import { customerView, type OrderRow } from "../_shared/orders.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -17,9 +18,11 @@ Deno.serve(async (req) => {
   try {
     const db = serviceClient();
     const { data: stall, error: stallError } = await db.from("stalls")
-      .select("id").eq("id", stallId).eq("provider", "mock").eq("public_announce", true).maybeSingle();
+      .select("id, provider, public_announce").eq("id", stallId).maybeSingle();
     if (stallError) throw stallError;
-    if (!stall) return json(req, { error: "not_found" }, 404);
+    if (!stall || !publicStallVisible(String(stall.provider), stall.public_announce === true)) {
+      return json(req, { error: "not_found" }, 404);
+    }
 
     const since = new Date(Date.now() - 12 * 3600 * 1000).toISOString();
     const { data, error } = await db.from("orders").select("*")

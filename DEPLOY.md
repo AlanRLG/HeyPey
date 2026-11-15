@@ -4,17 +4,21 @@ Guía para desplegar el sistema completo desde el repositorio `copiloto-zeroui/`
 Basada en la **Especificación técnica v3**. Lo marcado **[VERIFICAR]** es un supuesto que hay que confirmar
 con la fuente primaria o con una prueba técnica antes de depender de él.
 
-> **Estado del repo:** el **Nivel 1 está construido**. La versión original se verificó contra
-> Supabase local: migraciones `0001`–`0005` (incluye 311 palabras), Edge Functions `orders`, `webhooks`, `reconcile`
-> y `mock-pay`, `MockProvider` con `mock_charges`, y el simulador web en `tools/simulator/`. La nueva función `public-orders`
-> da acceso saneado a la pantalla del cliente sin compartir la sesión del comerciante; hay que repetir las pruebas con la cuenta nueva. Las brechas B1–B6 están
-> resueltas en el código; B7 (pey) sigue abierta a propósito. La app Android y la voz (Niveles 2 y 3) aún no existen.
+> **Estado del repo:** el **Nivel 1 está construido** y el Mock alojado pasó **19/19** en `tools/test/e2e_mock_remote.mjs`.
+> En el proyecto de demo ya están aplicadas las migraciones hasta `0009` y desplegadas las funciones `orders`, `webhooks`,
+> `reconcile`, `mock-pay`, `public-orders`, `catalog` y `summary`. El cron `reconcile-orders` respondió HTTP 200.
+> El puesto pey `343eff54-061f-434c-b0fd-2611c058092d` tiene `provider_account_ref` null: sin `bankAccountId`, pey usa la cuenta
+> ligada a la API key. En el código, `PEY_LIVE_ENABLED` sigue en `false`, `MIN_AMOUNT_CENTS` en `500` y `ORDER_TTL_SECONDS` en `180`.
+> En Supabase, durante la preparación de la demo, esos secretos están en `true`, `1` y `900`.
+> Una orden pey de $0.01 quedó `PAID`: el evento entró por webhook, la palabra pública coincidió y el banco mostró un solo cargo.
+> El primer QR venció sin pago y no es esa prueba. Las brechas B1–B6 están resueltas en el código.
+> La app Android y la voz (Niveles 2 y 3) aún no existen.
 > **Atajo:** `PROJECT_REF=<ref> DB_PASSWORD='<...>' STALL_ID=<uuid> tools/deploy/deploy_cloud.sh` despliega backend y
 > genera `tools/simulator/config.js` con datos públicos. La cuenta y el puesto se crean por separado; ver 4.5.
 >
 > Esta guía respeta las reglas de `AGENTS.md`: el servidor es la autoridad del estado, la palabra secreta nunca
-> llega a la vista del cliente antes de un pago verificado, los montos van en centavos enteros y la demo no usa
-> dinero real.
+> llega a la vista del cliente antes de un pago verificado y los montos van en centavos enteros. El repositorio no guarda
+> el cobro: la única transferencia real registrada es la orden de $0.01 ya descrita en la sección 5.2.
 
 ---
 
@@ -27,7 +31,7 @@ El sistema se despliega por capas. Cada nivel es demostrable por sí solo.
 | **1** | Backend + proveedor simulado (Mock) + simulador web con link público | Supabase, hosting estático | **Imprescindible** |
 | **2** | Nivel 1 + APK Android en modo manual (teclado, efectivo, QR, anuncio con palabra) | Android Studio, un teléfono | Recomendado |
 | **3** | Nivel 2 + voz (VAD, whisper.cpp, parser, diadema Bluetooth) | NDK, modelos, diadema | Solo si sobra tiempo |
-| **4** | Nivel 3 + pagos de prueba con pey® (CoDi) | Cuenta y CLABEs en pey | **Fuera de la demo**, salvo decisión explícita del dueño (`AGENTS.md`: no conectar dinero real) |
+| **4** | El cobro pey de $0.01 ya quedó `PAID` por webhook | Cuenta pey ligada a la API key; el repo no guarda datos bancarios | Hecho ese centavo. La app y la voz siguen pendientes. El QR vencido no cuenta |
 
 Orden de despliegue y dependencias:
 
@@ -51,7 +55,7 @@ al Nivel 2, va como descarga adjunta.
 - **Supabase** (plan gratuito alcanza para el MVP).
 - **Hosting estático** para el simulador: Vercel, Netlify o Cloudflare Pages.
 - **GitHub** con el repositorio **público** (lo exige la entrega del evento).
-- **pey®**: acceso en `portal.pey.mx` y documentación en `docs.pey.mx` (solo Nivel 4).
+- **pey®**: acceso en `portal.mipey.mx` y documentación en `docs.pey.mx`. El puesto de demo sigue en `mock`. Un puesto pey es otro registro.
 
 ### Herramientas locales
 
@@ -85,9 +89,10 @@ Se cargan con `supabase secrets set`. Los nombres son los usados en la spec o **
 | `MOCK_WEBHOOK_SECRET` | Firma HMAC del proveedor simulado | `openssl rand -hex 32` |
 | `ENABLE_MOCK_PAY` * | `true` solo en dev y demo con Mock; `false` con pagos reales | Manual |
 | `CRON_SECRET` * | Autentica la llamada de `pg_cron` a `reconcile` | `openssl rand -hex 32` |
-| `MIN_AMOUNT_CENTS` * | Monto mínimo por orden (ver brecha B1) | `500` en producción, `1` en pruebas con pey |
-| `PEY_LIVE_ENABLED` | Barrera del adaptador. `false` no llama a la red | `false` hasta una activación explícita |
-| `PEY_API_KEY` *, `PEY_WEBHOOK_SECRET` *, `PEY_BASE_URL` *, `PEY_BANK_ACCOUNT_ID` | Adaptador `providers/pey.ts` (`POST /codi/qr`, Standard Webhooks) | `portal.pey.mx` / `docs.pey.mx`. No copies una clave `sk_live` ni una CLABE |
+| `MIN_AMOUNT_CENTS` * | Monto mínimo por orden (ver brecha B1) | El código usa `500` si la variable falta. En Supabase, durante la demo, está en `1` |
+| `ORDER_TTL_SECONDS` | Segundos de vida de la orden antes de conciliar | El código usa `180` si la variable falta. En Supabase, durante la demo, está en `900` |
+| `PEY_LIVE_ENABLED` | Barrera del adaptador. El código solo llama a pey si el valor es exactamente `true` | El ejemplo del repo y el valor por defecto son `false`. En Supabase, durante la demo, está en `true` |
+| `PEY_API_KEY` *, `PEY_WEBHOOK_SECRET` *, `PEY_BASE_URL` *, `PEY_BANK_ACCOUNT_ID` | Adaptador `providers/pey.ts` (`POST /codi/qr`, Standard Webhooks). `PEY_BANK_ACCOUNT_ID` es un ULID de cuenta, el fallback si el puesto no tiene el suyo | `portal.mipey.mx` / `docs.pey.mx`. No copies una clave ni una CLABE |
 
 Supabase inyecta solas `SUPABASE_URL`, `SUPABASE_ANON_KEY` y `SUPABASE_SERVICE_ROLE_KEY` en las Edge Functions;
 no las pongas en `secrets set` (los nombres que empiezan con `SUPABASE_` están reservados).
@@ -127,26 +132,25 @@ VITE_SUPABASE_ANON_KEY=
 
 ## 3. Preflight: lo que debe existir y brechas de la spec
 
-### 3.1 Estado inicial del repo antes de construir Nivel 1 (de C1)
+### 3.1 Historia: el checkout `11c47be`, antes de construir el Nivel 1
 
-Checkout revisado: commit `11c47be` ("docs: link live Vercel base"). Según su propio `README.md`, es solo
-estructura inicial.
+Esta sección describe solo el commit `11c47be` ("docs: link live Vercel base"). La columna «En ese commit» no es el árbol de hoy. Hoy existen las migraciones `0001`–`0009`, las Edge Functions, el simulador con MockProvider y la transferencia pey de $0.01. Android, `data/golden/` y `tools/eval/` siguen sin construir.
 
-| Ruta | Estado |
+| Ruta | En ese commit |
 |---|---|
-| `README.md`, `AGENTS.md`, `docs/PLAN_DEMO.md`, `vercel.json`, `.gitignore`, `.editorconfig`, `.gitattributes` | Existen |
-| `tools/simulator/index.html` | Existe: pantalla de arranque estática, sin lógica |
-| `backend/supabase/migrations/` (`0001` a `0004`) | Falta (solo `.gitkeep`) |
-| `backend/supabase/functions/{orders,webhooks,reconcile,mock-pay}/index.ts` | Falta |
-| `backend/supabase/functions/_shared/{db.ts,auth.ts,providers/{types.ts,mock.ts,pey.ts}}` | Falta |
-| `backend/supabase/seed/secret_words.csv` y `data/words/` | Falta (≥ 300 palabras; columnas `word,spoken`) |
-| `backend/supabase/config.toml` | Falta (lo crea `supabase init`) |
-| `android/` (proyecto Gradle) | Falta (solo la carpeta `mx/copiloto/`) |
-| `data/golden/utterances.json`, `tools/eval/` | Falta |
+| `README.md`, `AGENTS.md`, `docs/PLAN_DEMO.md`, `vercel.json`, `.gitignore`, `.editorconfig`, `.gitattributes` | Ya estaban |
+| `tools/simulator/index.html` | Pantalla de arranque estática, sin lógica |
+| `backend/supabase/migrations/` (`0001` a `0004`) | No estaban (solo `.gitkeep`) |
+| `backend/supabase/functions/{orders,webhooks,reconcile,mock-pay}/index.ts` | No estaban |
+| `backend/supabase/functions/_shared/{db.ts,auth.ts,providers/{types.ts,mock.ts,pey.ts}}` | No estaban |
+| `backend/supabase/seed/secret_words.csv` y `data/words/` | No estaban (≥ 300 palabras; columnas `word,spoken`) |
+| `backend/supabase/config.toml` | No estaba (lo crea `supabase init`) |
+| `android/` (proyecto Gradle) | No estaba (solo la carpeta `mx/copiloto/`) |
+| `data/golden/utterances.json`, `tools/eval/` | No estaban |
 
-El primer trabajo es construir lo que falta siguiendo el alcance inicial de `docs/PLAN_DEMO.md`: esquema de órdenes,
+En ese momento el trabajo era construir el alcance inicial de `docs/PLAN_DEMO.md`: esquema de órdenes,
 selección de palabras, `MockProvider`, endpoint para crear orden y endpoint de pago simulado, más las vistas web de
-comerciante y cliente.
+comerciante y cliente. Ese backend ya está hecho.
 
 ### 3.2 Brechas detectadas en la spec (resolver ANTES de desplegar)
 
@@ -159,11 +163,8 @@ La spec exige `amount_cents between 100 and 5000000` en la tabla `orders` y en `
 Corrección: migración `0004` (abajo) + que `createOrder` lea `MIN_AMOUNT_CENTS` de la variable de entorno en
 lugar de `100` fijo + que Android lea el mínimo de configuración (`BuildConfig`) en lugar de la constante `MIN`.
 
-**B2. Falta la tabla `mock_charges`.**
-`mock.ts` devuelve siempre `"pending"` en `getStatus` ("la tabla `mock_charges` se omitió por brevedad").
-Pero `handleWebhook` hace doble verificación con `getStatus`: con esa implementación, **todo pago simulado
-termina en `PENDING_UNKNOWN`** y nunca en `PAID`. Hay que crear la tabla, que `createCharge` inserte la
-carga, que `getStatus` la lea y que `mock-pay` la marque como `settled` **antes** de enviar el webhook firmado.
+**B2. La spec v3 omitía `mock_charges` y hablaba de `getStatus`.**
+Ese borrador devolvía siempre `"pending"` en `getStatus`, así que la doble verificación del webhook dejaba todo pago simulado en `PENDING_UNKNOWN`. La tabla ya existe. El código actual no tiene `getStatus`: `getPayment` lee `mock_charges`, y `mock-pay` marca la carga `settled` antes de enviar el webhook firmado.
 
 **B3. `reconcile` y `webhooks` no llevan JWT de usuario.**
 Hay que desactivar `verify_jwt` en ambas (config abajo). `webhooks` se protege con la firma del proveedor;
@@ -184,7 +185,7 @@ documentación vigente de *Realtime Authorization* antes de seguir.
 Si el simulador web llama a las Edge Functions desde el navegador, cada función debe responder el
 preflight `OPTIONS` y devolver `Access-Control-Allow-Origin` (y `Allow-Headers` con `authorization, apikey, content-type`).
 
-**B7. El adaptador pey no está activado.** El código sigue `docs.pey.mx` (`POST /codi/qr`, montos en pesos, expiración mínima de 360 s, Standard Webhooks) y las pruebas usan HTTP falso. `PEY_LIVE_ENABLED` vale `false`. El OpenAPI 2026-10-20 no documenta una clave de idempotencia en `POST /codi/qr` ni un endpoint para cancelar el QR: un claim en curso no se suelta por tiempo, y si la respuesta es incierta no se crea otro QR. El webhook se confirma con `GET /transaction/{transactionId}` (estado `PAID`, `payableId` del QR, monto y `metadata.orderId`). No hay `getStatus`: sin un `transactionId` o una orden, no se inventa `pending`. Si el QR ya se creó y no se pudo guardar, el claim sigue; `record_held_charge` anota ese QR y `recover_stuck_charge` lo publica sin crear otro. La conciliación sin webhook recorre `GET /transaction/codi/qr/{id}` y elige un pago de esa orden, no el primero de la lista. [VERIFICAR] con un evento real que `metadata.orderId` vuelva en `metadata.externalMetadata.orderId` y que `payableId` sea el IDC del QR.
+**B7. El adaptador pey está apagado en el código y encendido en Supabase durante la demo.** `0009` ya está aplicada y las funciones desplegadas. Si `PEY_LIVE_ENABLED` no es `true`, el código no llama a la red; el ejemplo del repo lo deja en `false`. En Supabase, para esta demo, vale `true`, con `MIN_AMOUNT_CENTS=1` y `ORDER_TTL_SECONDS=900`. Una orden de $0.01 quedó `PAID` por webhook, con la palabra pública coincidente y un solo cargo en el banco. El QR que venció antes, sin pago, no es esa prueba. El código sigue `docs.pey.mx` (`POST /codi/qr`, montos en pesos, expiración mínima de 360 s, Standard Webhooks) y las pruebas usan HTTP falso. El OpenAPI 2026-10-20 no documenta una clave de idempotencia en `POST /codi/qr` ni un endpoint para cancelar el QR: un claim en curso no se suelta por tiempo, y si la respuesta es incierta no se crea otro QR. El webhook se confirma con `GET /transaction/{transactionId}` (estado `PAID`, `payableId` del QR, monto y `metadata.orderId`). No hay `getStatus`: sin un `transactionId` o una orden, no se inventa `pending`. Si el QR ya se creó y no se pudo guardar, el claim sigue; `record_held_charge` anota ese QR y `recover_stuck_charge` lo publica sin crear otro. La conciliación sin webhook recorre `GET /transaction/codi/qr/{id}` y elige un pago de esa orden, no el primero de la lista. En el pago real de $0.01, `payableId` coincidió con el id del QR y `orderId` volvió en `metadata.externalMetadata.orderId`. Sigue sin probarse una devolución, un segundo cobro y una conciliación real que encuentre el pago sin ese webhook.
 
 ### 3.3 Migración correctiva `0004_mock_and_limits.sql`
 
@@ -304,7 +305,13 @@ insert into catalog_items (stall_id, name, aliases, unit, price_cents) values
   ('<STALL_ID>', 'jitomate', '{tomate}',     'kg',  3500);
 ```
 
-Para cambiar al proveedor real después: `update stalls set provider='pey', provider_account_ref='<cuenta/CLABE en pey>' where id='<STALL_ID>';`
+No conviertas el puesto demo. El puesto pey de esta demo ya existe (`343eff54-061f-434c-b0fd-2611c058092d`) con `provider = 'pey'` y `provider_account_ref` null. No vuelvas a insertarlo. Al omitir `bankAccountId`, el cobro usa la cuenta CoDi ligada a la API key. Un puesto nuevo, si hiciera falta, guardaría el ULID de `portal.mipey.mx` (26 caracteres), nunca una CLABE:
+
+```sql
+insert into stalls (merchant_id, name, market, provider, provider_account_ref, public_announce)
+values ('<MERCHANT_ID>', 'Puesto pey', 'Mercado de prueba', 'pey', '<ULID de la cuenta pey>', true)
+returning id;
+````
 
 ### 4.6 Realtime
 
@@ -370,35 +377,45 @@ Con `stalls.provider = 'mock'` todo el flujo corre sin banco:
 
 1. La app crea una orden → el backend crea la carga en `mock_charges` y devuelve el QR simulado (`MOCKCODI|...`).
 2. Se llama a `mock-pay` con el `chargeId` → marca la carga `settled` y envía el webhook firmado a `/webhooks/mock`.
-3. El backend verifica firma, idempotencia, monto y `getStatus` → `PAID` → emite `order.paid`.
+3. El backend verifica la firma, el monto y `getPayment` → `PAID` → emite `order.paid`.
 
 ### 5.2 pey® (Nivel 4)
 
-> `AGENTS.md` pide **no conectar dinero real para la demo**. Los pagos de prueba de pey son de $0.01 y no se
-> devuelven, así que usarlos es una decisión del dueño del proyecto. Esta sección queda como referencia para después
-> de la demo o para una prueba aislada, nunca como parte del recorrido público del simulador.
+> El adaptador también está probado con HTTP falso. `0009` y las funciones ya están desplegadas. El cron `reconcile-orders` respondió HTTP 200.
+> El puesto pey omite `bankAccountId` (`provider_account_ref` null) y cobra en la cuenta ligada a la API key.
+> El código deja `PEY_LIVE_ENABLED` en `false`, `MIN_AMOUNT_CENTS` en `500` y `ORDER_TTL_SECONDS` en `180`.
+> En Supabase, durante la preparación de la demo, esos valores están en `true`, `1` y `900`. El script no los modifica.
+> Una orden de $0.01 quedó `PAID`: el webhook entró, la palabra pública coincidió y el banco mostró un solo cargo.
+> El primer QR venció sin pago y no forma parte de ese resultado. Una transferencia de $0.01 no se devuelve.
 
-Lo que dice la hoja del evento y lo que sigue pendiente:
+Qué ya cubren los dobles: `POST /codi/qr` (pesos, expiración ≥ 360, cuenta por puesto o la de la API key si no hay `bankAccountId`), `GET /transaction/{id}` con método, moneda, tipo, QR, monto y `metadata.externalMetadata.orderId`, el listado paginado, Standard Webhooks, un 400 que no crea QR, un 5xx o un cuerpo ilegible que no suelta el claim, y un 404 que deja la orden en `PENDING_UNKNOWN`.
 
-- Las **CLABEs pre-autorizadas** del evento se dan de alta en `portal.pey.mx` para empezar a usar el API el mismo día.
-  El alta real ante Banxico tarda unos cinco días.
-- Los pagos de prueba son de **$0.01** y **no se devuelven**.
-- Cada equipo registra sus **propias cuentas CLABE** para publicar el proyecto cuando estén activas.
-- La documentación del API y los webhooks está en `docs.pey.mx`; la hoja menciona `/codi/pn` para notificaciones
-  **[VERIFICAR el path exacto y su formato en la documentación]**.
+Qué ya mostró el cobro de $0.01: el evento llegó a `webhooks/pey`, la orden pasó a `PAID` una vez, la palabra de `public-orders` coincidió y el banco registró un solo cargo. El QR anterior, vencido y sin pago, queda fuera de esa prueba.
 
-Checklist de integración:
+Ya hecho, sin tocar el puesto mock:
 
-- [x] `providers/pey.ts` sigue `POST /codi/qr` y `GET /transaction/codi/qr/{id}`. Cubierto con `fetch` falso; no llama a `api.pey.mx`.
-- [ ] Confirmar con un evento real que `metadata.orderId` regresa en `metadata.externalMetadata.orderId`.
-- [x] `verifyWebhook` usa Standard Webhooks (`webhook-id`, `webhook-timestamp`, `webhook-signature`), probado con firmas de prueba.
-- [ ] Confirmar si el evento trae la **clave de rastreo** (`tracking_key`).
-- [ ] Registrar en pey la URL de webhook: `https://<PROJECT_REF>.supabase.co/functions/v1/webhooks/pey`.
-- [ ] Cargar `PEY_*` con `supabase secrets set`, y `MIN_AMOUNT_CENTS=1` mientras pruebes con $0.01.
-- [ ] `update stalls set provider='pey', provider_account_ref=... where id='<STALL_ID>';`
-- [ ] Poner `ENABLE_MOCK_PAY=false` (o quitar la función) en cuanto el flujo real funcione.
-- [ ] Probar la notificación **en el banco elegido**: la hoja pide validarlas antes de prometer.
-- [ ] Documentar en el README qué pasa con pagos tardíos, fallas y devoluciones (la spec ya define `PAID_LATE` como bandera `late_payment`).
+1. El puesto pey es `343eff54-061f-434c-b0fd-2611c058092d`, con `provider_account_ref` null.
+2. Las funciones están desplegadas. `webhooks` y `reconcile` siguen con `verify_jwt = false`: el webhook se autentica con Standard Webhooks y el cron con `x-cron-secret`.
+3. El cron `reconcile-orders` respondió HTTP 200.
+4. En Supabase, para esta demo: `PEY_LIVE_ENABLED=true`, `MIN_AMOUNT_CENTS=1`, `ORDER_TTL_SECONDS=900`. `PEY_BANK_ACCOUNT_ID` sigue vacío para no sustituir la cuenta de la API key.
+
+El guion que ya se usó, y que por defecto no crea otra orden, se lanza desde la raíz del repo:
+
+```text
+node tools/test/e2e_pey_remote.mjs
+```
+
+Eso solo inicia sesión y comprueba por REST que el puesto es `provider = 'pey'` y `provider_account_ref` es null. No crea una orden. La contraseña y el JWT no se guardan ni se imprimen.
+
+Crear el QR exige otra ejecución, un terminal interactivo y la frase exacta `CREAR QR DE UN CENTAVO`:
+
+```text
+node tools/test/e2e_pey_remote.mjs --crear
+```
+
+El cuerpo queda fijo en `amountCents = 1` y `method = 'codi'`. Antes de `POST /orders` el script escribe una clave de idempotencia en `tools/test/.pey-cent/`, ignorada por Git. Repetir `--crear` reutiliza esa clave y no genera otra. Si la llamada expira o la respuesta es incierta, la clave permanece y el script indica cómo consultar `GET /orders/:id` y `public-orders`. El QR, si llega, se guarda como PNG y SVG en esa misma carpeta, con la librería local `qrcode`. Antes de indicar el pago, comprueba que `public-orders` no contiene la palabra. `node tools/test/e2e_pey_remote.mjs --esperar` solo consulta esas dos rutas hasta `PAID` y comprueba que la palabra pública coincide. No llama a `mock-pay`, no finge un webhook y no hace la transferencia.
+
+Ese guion ya produjo la orden pagada. No hace falta otro cobro para documentar el flujo. Si se repite `--crear`, el script reutiliza la clave y no debe presentarse como una prueba nueva. El puesto mock no se modifica. Volver el secreto de Supabase a `PEY_LIVE_ENABLED=false`, `MIN_AMOUNT_CENTS=500` y `ORDER_TTL_SECONDS=180` es una decisión posterior del dueño; el código ya arranca con esos valores cuando las variables no están definidas.
 
 > Un pago confirmado **no prueba identidad ni entrega**. La entrega la valida el comerciante con su Palabra Secreta.
 
@@ -647,7 +664,7 @@ Checklist del formulario de entrega (domingo 15 de noviembre, 1:00 PM hora CDMX;
 
 | Síntoma | Causa probable | Solución |
 |---|---|---|
-| La orden queda en `PENDING_UNKNOWN` tras pagar | `getStatus` del Mock devuelve `pending` (brecha B2) | Crear `mock_charges` y que `mock-pay` la marque `settled` antes del webhook |
+| La orden queda en `PENDING_UNKNOWN` tras pagar | La spec antigua lo atribuía a `getStatus` devolviendo `pending`. El código actual usa `getPayment` | Revisar `mock_charges` en Mock, o la confirmación de pey. `mock-pay` ya marca `settled` antes del webhook |
 | `/webhooks/...` responde 401 | Firma o timestamp inválidos, o JWT exigido | Mismo `MOCK_WEBHOOK_SECRET` en ambos lados; reloj correcto (±5 min); `verify_jwt = false` |
 | `422 monto` al crear la orden | Monto bajo el mínimo | Ajusta `MIN_AMOUNT_CENTS` (brecha B1) |
 | El cliente no actualiza la orden | `public-orders` sin desplegar, puesto sin `public_announce`, o polling sin conexión | Despliega `public-orders`, comprueba el `STALL_ID` y revisa la respuesta de la función |

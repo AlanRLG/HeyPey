@@ -1,6 +1,7 @@
 // mock-pay — SOLO DEMO. Simula que el banco liquidó una carga del MockProvider y envía el
 // webhook firmado a /webhooks/mock. El estado PAID lo decide igualmente el webhook (servidor).
 // Protecciones: ENABLE_MOCK_PAY, JWT del dueño y provider = 'mock'.
+import { mockPayAllowed } from "../_shared/access.ts";
 import { requireUser, ownedStall } from "../_shared/auth.ts";
 import { serviceClient } from "../_shared/db.ts";
 import { json, preflight } from "../_shared/http.ts";
@@ -27,7 +28,7 @@ Deno.serve(async (req) => {
 
   const stall = await ownedStall(caller.userId, order.stall_id);
   if (!stall) return json(req, { error: "not_found" }, 404);
-  if (stall.provider !== "mock" || order.provider !== "mock") return json(req, { error: "solo_mock" }, 403);
+  if (!mockPayAllowed(String(order.provider), stall.provider)) return json(req, { error: "solo_mock" }, 403);
 
   // Variantes de prueba (sección 9 de DEPLOY.md).
   const eventId = typeof body.eventId === "string" && body.eventId ? body.eventId : `evt_${crypto.randomUUID()}`;

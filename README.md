@@ -4,17 +4,21 @@ Repositorio base para el hack de Cursor. El producto propuesto permite a un come
 
 ## Estado
 
-**Nivel 1 construido y verificado en Supabase con MockProvider, sin dinero real.** Las migraciones `0006`–`0008` están aplicadas en el proyecto de demo; se desplegaron `orders`, `mock-pay`, `catalog`, `summary`, `webhooks`, `reconcile` y `public-orders`. La prueba alojada `tools/test/e2e_mock_remote.mjs` pasó 19 comprobaciones: login, orden, pago simulado, webhook duplicado, monto incorrecto, pago tardío, efectivo y corte. Las reglas de base también se comprueban con `npm test` en `tools/test` (Postgres embebido, sin red). El adaptador pey está escrito y cubierto con HTTP falso; `PEY_LIVE_ENABLED` permanece en `false`.
+**Nivel 1 verificado en Supabase con MockProvider, y una orden pey de $0.01 ya cobrada.** Las migraciones `0006`–`0009` y las funciones `orders`, `webhooks`, `reconcile`, `mock-pay`, `public-orders`, `catalog` y `summary` están desplegadas. `tools/test/e2e_mock_remote.mjs` pasó **19/19** comprobaciones del flujo Mock. El cron `reconcile-orders` respondió HTTP 200. El puesto demo sigue en `mock`. El puesto pey `343eff54-061f-434c-b0fd-2611c058092d` deja `provider_account_ref` en null: al omitir `bankAccountId`, el cobro usa la cuenta CoDi ligada a la API key.
+
+El código y `backend/.env.secrets.example` traen `PEY_LIVE_ENABLED=false`, `MIN_AMOUNT_CENTS=500` y `ORDER_TTL_SECONDS=180`. En Supabase, durante la preparación de la demo, esos tres valores están en `true`, `1` y `900`. El repositorio no los cambia.
+
+La prueba que cuenta es una sola orden de $0.01: pasó a `PAID` porque el webhook de pey entró, la palabra pública coincidió con la privada y el banco mostró un solo cargo. Hubo un QR anterior que venció sin pago; ese intento no es la prueba exitosa.
 
 | Funciona | Es simulado | Falta |
 |---|---|---|
 | Órdenes con número diario y palabra de un solo uso (24 h, o últimas 200); idempotencia; reintento si el QR falló; efectivo (`PAID_CASH`); corrección; lectura de una orden; catálogo y corte del día | El banco (`MockProvider`, tabla `mock_charges`) y el QR (`MOCKCODI|SIMULADO|...`, no es CoDi válido) | Voz (VAD, whisper.cpp, parser), app Android. El simulador web aún no llama a corregir, catálogo ni corte |
-| Webhook firmado (HMAC en mock, Standard Webhooks en pey). El pago se marca con el identificador y el monto que devuelve el proveedor | El botón del comerciante llama a `/mock-pay`, solo para puestos `provider = 'mock'` y usuarios dueños | Activar pey: hace falta una clave rotada, `PEY_LIVE_ENABLED=true` y un puesto `provider='pey'`. Hoy no hay cobros reales |
-| La vista pública consulta `/public-orders`: la palabra aparece **solo** en un `PAID` que no sea tardío | Cuenta y puesto de demo con datos ficticios | |
+| Webhook firmado (HMAC en mock, Standard Webhooks en pey). El pago se marca solo si `GET /transaction/{id}` confirma id, `PAID`, `API_CODI_QR`, el QR, `CODI`, `MXN`, el monto y la orden. Una orden de $0.01 llegó a `PAID` por ese webhook | El botón del comerciante llama a `/mock-pay`, solo para puestos `provider = 'mock'` | No repetir el cobro. El QR que venció sin pago no cuenta como prueba |
+| La vista pública consulta `/public-orders` para un puesto `mock` o `pey` con `public_announce`. La palabra aparece **solo** en un `PAID` que no sea tardío. En la orden de $0.01 esa palabra coincidió | Cuenta y puesto de demo con datos ficticios, proveedor `mock`. El puesto pey no guarda cuenta propia | El simulador público sigue sin `STALL_ID` |
 | Pago tardío: la orden cancelada o expirada pasa a `PAID` con `late_payment`; el aviso es solo del comerciante | | |
 | Conciliación: si el proveedor no contesta, `PENDING_UNKNOWN` hasta 30 min y luego alerta, sin darla por expirada. `purge_old_utterances` borra transcripciones a los 30 días | | |
 
-El despliegue en la nube se describe en [DEPLOY.md](DEPLOY.md). El usuario y puesto de prueba están vinculados en Supabase; el `STALL_ID` público sigue vacío en `tools/simulator/config.js`, por lo que la página muestra “Simulador sin configurar”. Para probar el backend alojado desde una terminal, define `TEST_STALL_ID` con el UUID del puesto y ejecuta `node tools/test/e2e_mock_remote.mjs`; el script pide las credenciales de la cuenta demo sin guardarlas en el repo.
+El despliegue en la nube se describe en [DEPLOY.md](DEPLOY.md). El usuario y puesto de prueba están vinculados en Supabase; el `STALL_ID` público sigue vacío en `tools/simulator/config.js`, por lo que la página muestra “Simulador sin configurar”. Para el Mock alojado, define `TEST_STALL_ID` con el UUID del puesto demo y ejecuta `node tools/test/e2e_mock_remote.mjs`. `node tools/test/e2e_pey_remote.mjs` solo lee; crear un QR pide la frase `CREAR QR DE UN CENTAVO` y reutiliza la clave de `tools/test/.pey-cent/`, carpeta ignorada por Git. Esa carpeta no se versiona. Ninguno de los dos scripts guarda ni imprime la contraseña ni el JWT.
 
 Simulador: [copiloto-zeroui.vercel.app](https://copiloto-zeroui.vercel.app/) (`demo.html` muestra comerciante y cliente lado a lado). Los cambios en `main` se despliegan automáticamente con Vercel.
 
@@ -32,7 +36,7 @@ La especificación de referencia es `Modulo2_Copiloto_Acustico_ZeroUI_v3.pdf`, e
 ## Estructura
 
 ```text
-backend/supabase/       Migraciones 0001–0008 y Edge Functions (orders, webhooks, reconcile, mock-pay, public-orders, catalog, summary)
+backend/supabase/       Migraciones 0001–0009 y Edge Functions (orders, webhooks, reconcile, mock-pay, public-orders, catalog, summary)
 android/                App Kotlin, modos Comerciante y Cliente (por construir)
 tools/simulator/        Simulador web estático (comerciante, cliente, demo lado a lado)
 tools/deploy/           Despliegue a la nube, cuenta demo y prueba de punta a punta
@@ -46,7 +50,7 @@ docs/                   Alcance y plan de demo
 
 ## Enfoque para la demo
 
-Construir primero el flujo sin voz y con `MockProvider`: crear orden, mostrar QR de prueba, simular el pago, verificar el evento en el servidor y anunciar el número de orden con la palabra correcta. Después se integran Android, audio y proveedor real. Ver [plan de demo](docs/PLAN_DEMO.md).
+El flujo sin voz y con `MockProvider` ya está construido: crear orden, mostrar un QR de prueba, simular el pago, verificar el evento en el servidor y anunciar el número de orden con la palabra correcta. Pey ya está integrado y quedó verificado con una transferencia real de $0.01 por webhook. Faltan Android y el audio. Ver [plan de demo](docs/PLAN_DEMO.md).
 
 ## Configuración de Vercel
 

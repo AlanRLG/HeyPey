@@ -6,11 +6,12 @@ import { test } from "node:test";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
+import { mockPayAllowed, publicStallVisible } from "../../backend/supabase/functions/_shared/access.ts";
 import { itemsError, parseCatalogBody } from "../../backend/supabase/functions/_shared/items.ts";
 import { ACTIVE_STATES, customerView, merchantView, type OrderRow } from "../../backend/supabase/functions/_shared/orders.ts";
 import { signMockPayloadWithSecret, verifyMockSignature } from "../../backend/supabase/functions/_shared/providers/mock_sign.ts";
 import { canTakeChargeClaim, createChargeOnce, UncertainChargeError, type ChargeDraft, type CreatedCharge } from "../../backend/supabase/functions/_shared/charge_once.ts";
-import { backoffMs, reconcileAction } from "../../backend/supabase/functions/_shared/reconcile_policy.ts";
+import { backoffMs, reconcileAction, shouldConsultProvider } from "../../backend/supabase/functions/_shared/reconcile_policy.ts";
 import { confirmedReconcilePayment } from "../../backend/supabase/functions/_shared/reconcile_payment.ts";
 import { buildSummary, mexicoCityDay, type SummaryOrder } from "../../backend/supabase/functions/_shared/summary.ts";
 
@@ -42,8 +43,20 @@ test("la vista pública oculta la palabra hasta un PAID que no sea tardío", () 
   assert.equal(customerView(order()).secretWord, null);
   assert.equal(customerView(order({ state: "PAID" })).secretWord, "tortuga");
   assert.equal(customerView(order({ state: "PAID", late_payment: true })).secretWord, null);
+  assert.equal(customerView(order({ state: "PENDING_UNKNOWN" })).secretWord, null);
+  assert.equal(customerView(order({ state: "AWAITING_PAYMENT" })).secretWord, null);
   assert.equal(merchantView(order({ state: "PAID", late_payment: true })).secretWord, "tortuga");
   assert.equal(merchantView(order({ state: "PAID", late_payment: true })).latePayment, true);
+});
+
+test("la pantalla pública acepta mock y pey anunciados, y mock-pay no liquida pey", () => {
+  assert.equal(publicStallVisible("mock", true), true);
+  assert.equal(publicStallVisible("pey", true), true);
+  assert.equal(publicStallVisible("pey", false), false);
+  assert.equal(publicStallVisible("otro", true), false);
+  assert.equal(mockPayAllowed("mock", "mock"), true);
+  assert.equal(mockPayAllowed("pey", "pey"), false);
+  assert.equal(mockPayAllowed("mock", "pey"), false);
 });
 
 test("una orden PAID no está entre las que se pueden cancelar", () => {
@@ -370,6 +383,59 @@ test("la conciliación no expira si el proveedor no contesta", () => {
   }).kind, "pay");
 });
 
+test("una alerta previa no impide consultar y confirmar un pago posterior", () => {
+  const expiresAt = "2026-11-15T18:00:00Z";
+  const nowMs = Date.parse(expiresAt) + 40 * 60_000;
+  const input = {
+    state: "PENDING_UNKNOWN",
+    expiresAt,
+    nowMs,
+    attempts: 5,
+    unknownSince: expiresAt,
+    nextReconcileAt: null,
+  };
+  assert.equal(shouldConsultProvider(input), true);
+  assert.equal(reconcileAction({ ...input, probe: "open", alerted: true }).kind, "skip");
+  assert.equal(reconcileAction({ ...input, probe: "settled", alerted: true }).kind, "pay");
+});
+
+test("un rechazo persistente queda visible y no paga ni expira", () => {
+  const expiresAt = "2026-11-15T18:00:00Z";
+  const nowMs = Date.parse(expiresAt) + 40 * 60_000;
+  const first = reconcileAction({
+    state: "AWAITING_PAYMENT",
+    expiresAt,
+    nowMs,
+    probe: "rejected",
+    attempts: 0,
+    unknownSince: null,
+    nextReconcileAt: null,
+    alerted: false,
+  });
+  assert.equal(first.kind, "review");
+  if (first.kind !== "review") return;
+  assert.equal(first.alert, true);
+  assert.equal(first.attempts, 1);
+  assert.ok(first.nextReconcileAt);
+
+  const again = reconcileAction({
+    state: "PENDING_UNKNOWN",
+    expiresAt,
+    nowMs: nowMs + 120_000,
+    probe: "rejected",
+    attempts: 1,
+    unknownSince: expiresAt,
+    nextReconcileAt: first.nextReconcileAt,
+    alerted: true,
+  });
+  assert.equal(again.kind, "review");
+  if (again.kind !== "review") return;
+  assert.equal(again.alert, false);
+  assert.equal(again.attempts, 2);
+  assert.notEqual(again.kind, "pay");
+  assert.notEqual(again.kind, "expire");
+});
+
 test("reglas SQL del Mock en Postgres embebido", { timeout: 120_000 }, async () => {
   const db = new PGlite();
   let pass = 0;
@@ -412,7 +478,7 @@ test("reglas SQL del Mock en Postgres embebido", { timeout: 120_000 }, async () 
         values (payload, event, topic, private, 'broadcast');
       end $$;
     `);
-    for (const file of ["0001_core.sql", "0002_functions.sql", "0003_rls_realtime.sql", "0004_mock_and_limits.sql", "0006_payment_integrity.sql", "0007_charge_claim.sql", "0008_held_charge.sql"]) {
+    for (const file of ["0001_core.sql", "0002_functions.sql", "0003_rls_realtime.sql", "0004_mock_and_limits.sql", "0006_payment_integrity.sql", "0007_charge_claim.sql", "0008_held_charge.sql", "0009_pey_account_ref.sql"]) {
       let sql = readFileSync(join(root, "backend/supabase/migrations", file), "utf8");
       // PGlite ya trae gen_random_uuid() en el núcleo y no instala el archivo pgcrypto.control.
       if (file === "0001_core.sql") sql = sql.replace(/create extension if not exists pgcrypto;\s*/i, "");
@@ -810,6 +876,22 @@ test("reglas SQL del Mock en Postgres embebido", { timeout: 120_000 }, async () 
       check("el usuario autenticado tampoco lee el banco de palabras", wordBank === 0);
       const priv = await db.query("select has_function_privilege('anon', 'mark_order_paid(text,text,text,uuid,bigint,text,text,jsonb)', 'execute') as allowed");
       check("anon no puede ejecutar mark_order_paid", priv.rows[0].allowed === false);
+      const authPay = await db.query("select has_function_privilege('authenticated', 'mark_order_paid(text,text,text,uuid,bigint,text,text,jsonb)', 'execute') as allowed");
+      check("authenticated no puede ejecutar mark_order_paid", authPay.rows[0].allowed === false);
+      const heldPriv = await db.query(`select
+        has_function_privilege('anon', 'record_held_charge(uuid,text,text,timestamptz)', 'execute') as anon_record,
+        has_function_privilege('authenticated', 'recover_stuck_charge(uuid)', 'execute') as auth_recover`);
+      check("anon y authenticated no recuperan un QR a mano", heldPriv.rows[0].anon_record === false && heldPriv.rows[0].auth_recover === false);
+      let clabeRejected = false;
+      try {
+        await db.query("update stalls set provider_account_ref = '012345678901234567' where id = $1::uuid", [stall]);
+      } catch {
+        clabeRejected = true;
+      }
+      check("el puesto no guarda una CLABE en provider_account_ref", clabeRejected);
+      await db.query("update stalls set provider_account_ref = '01ARZ3NDEKTSV4RRFFQ69G5FAV' where id = $1::uuid", [stall]);
+      const account = await db.query("select provider_account_ref from stalls where id = $1::uuid", [stall]);
+      check("el puesto sí guarda un ID de cuenta pey", account.rows[0].provider_account_ref === "01ARZ3NDEKTSV4RRFFQ69G5FAV");
     }
 
     console.log(`SQL embebido: ${pass} OK, ${fail} fallos`);

@@ -5,7 +5,7 @@ import type { OrderRow } from "./orders.ts";
 import { getProvider } from "./providers/index.ts";
 import type { VerifiedPayment } from "./providers/types.ts";
 import { confirmedReconcilePayment } from "./reconcile_payment.ts";
-import { type Probe, reconcileAction } from "./reconcile_policy.ts";
+import { type Probe, reconcileAction, shouldConsultProvider } from "./reconcile_policy.ts";
 
 export async function reconcileOrders(stallId?: string): Promise<{
   paid: number;
@@ -33,17 +33,14 @@ export async function reconcileOrders(stallId?: string): Promise<{
   let paid = 0, expired = 0, unknown = 0, alerted = 0;
   const nowMs = Date.now();
   for (const o of (data ?? []) as OrderRow[]) {
-    const actionPreview = reconcileAction({
+    if (!shouldConsultProvider({
       state: o.state,
       expiresAt: o.expires_at,
       nowMs,
-      probe: "open",
       attempts: o.reconcile_attempts ?? 0,
       unknownSince: o.reconcile_unknown_since ?? null,
       nextReconcileAt: o.next_reconcile_at ?? null,
-      alerted: !!o.reconcile_alerted_at,
-    });
-    if (actionPreview.kind === "skip") continue;
+    })) continue;
 
     let payment: VerifiedPayment | null | undefined = null;
     if (!o.provider || !o.provider_charge_id) {
@@ -55,18 +52,17 @@ export async function reconcileOrders(stallId?: string): Promise<{
           amountCents: o.amount_cents,
         });
       } catch (e) {
-        console.error("getPayment", o.id, e);
+        if (e instanceof Error && e.name === "PeyPaymentRejected") {
+          if (await markForReview(db, o, nowMs, e.message)) alerted++;
+          continue;
+        }
+        console.error("getPayment", o.id, e instanceof Error ? e.name : "error");
         payment = undefined;
       }
     }
     const decision = payment ? confirmedReconcilePayment(o, payment) : null;
     if (decision && decision.reason !== "ok" && decision.reason !== "unconfirmed") {
-      await audit(o.id, decision.reason, {
-        via: "reconcile",
-        expected: o.amount_cents,
-        received: decision.amountCents ?? null,
-        chargeId: o.provider_charge_id,
-      });
+      if (await markForReview(db, o, nowMs, decision.reason)) alerted++;
       continue;
     }
     const probe: Probe = payment === undefined ? "unreachable" : decision?.pay ? "settled" : "open";
@@ -133,4 +129,39 @@ export async function reconcileOrders(stallId?: string): Promise<{
     }
   }
   return { paid, expired, unknown, alerted, purged };
+}
+
+async function markForReview(
+  db: ReturnType<typeof serviceClient>,
+  order: OrderRow,
+  nowMs: number,
+  reason: string,
+): Promise<boolean> {
+  const action = reconcileAction({
+    state: order.state,
+    expiresAt: order.expires_at,
+    nowMs,
+    probe: "rejected",
+    attempts: order.reconcile_attempts ?? 0,
+    unknownSince: order.reconcile_unknown_since ?? null,
+    nextReconcileAt: order.next_reconcile_at ?? null,
+    alerted: !!order.reconcile_alerted_at,
+  });
+  if (action.kind !== "review") return false;
+  const patch: Record<string, unknown> = {
+    state: "PENDING_UNKNOWN",
+    reconcile_attempts: action.attempts,
+    reconcile_unknown_since: action.unknownSince,
+    next_reconcile_at: action.nextReconcileAt,
+  };
+  if (action.alert) patch.reconcile_alerted_at = new Date(nowMs).toISOString();
+  const { data } = await db.from("orders").update(patch)
+    .eq("id", order.id).in("state", ["AWAITING_PAYMENT", "PENDING_UNKNOWN"]).select("id");
+  await audit(order.id, reason, {
+    via: "reconcile",
+    attempts: action.attempts,
+    alerted: action.alert || !!order.reconcile_alerted_at,
+    changed: !!data?.length,
+  });
+  return action.alert && !!data?.length;
 }

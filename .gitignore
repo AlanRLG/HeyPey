@@ -14,5 +14,7 @@ android/local.properties
 *.aab
 .DS_Store
 Thumbs.db
+tools/test/.pey-cent/
 !.env.secrets.example
 CURSOR_BACKEND.md
+PEY_CURSOR_TASK.md

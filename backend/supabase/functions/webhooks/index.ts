@@ -5,8 +5,8 @@ import { audit, serviceClient } from "../_shared/db.ts";
 import { json } from "../_shared/http.ts";
 import type { OrderRow } from "../_shared/orders.ts";
 import { getProvider } from "../_shared/providers/index.ts";
-import { confirmedReconcilePayment } from "../_shared/reconcile_payment.ts";
-import type { VerifiedPayment } from "../_shared/providers/types.ts";
+import { redactSecrets } from "../_shared/access.ts";
+import { settleWebhookPayment } from "../_shared/webhook_settle.ts";
 
 interface PaidResult {
   outcome: string;
@@ -26,7 +26,10 @@ Deno.serve(async (req) => {
 
   const raw = await req.text();
   let event;
-  try { event = await provider.verifyWebhook(req, raw); } catch (e) { console.error(e); event = null; }
+  try { event = await provider.verifyWebhook(req, raw); } catch (e) {
+    console.error("verifyWebhook", redactSecrets(e instanceof Error ? e.message : "error"));
+    event = null;
+  }
   if (!event) {
     await audit(null, "invalid_signature", { provider: providerName });
     return json(req, { error: "invalid_signature" }, 401);
@@ -41,55 +44,60 @@ Deno.serve(async (req) => {
   const { data: orderData } = await db.from("orders").select("id, amount_cents, provider, provider_charge_id")
     .eq("provider_charge_id", event.chargeId).maybeSingle();
   const order = orderData as Pick<OrderRow, "id" | "amount_cents" | "provider" | "provider_charge_id"> | null;
-  if (!order || order.id !== event.reference || order.provider !== providerName) {
-    await audit(order?.id ?? null, "ref_mismatch", { chargeId: event.chargeId, reference: event.reference, eventId: event.eventId });
-    return json(req, { ok: false, reason: "ref_mismatch" });
-  }
-  if (event.amountCents !== order.amount_cents) {
-    await audit(order.id, "amount_mismatch", { expected: order.amount_cents, received: event.amountCents, eventId: event.eventId });
-    return json(req, { ok: false, reason: "amount_mismatch" });
-  }
-
-  if (!event.transactionId) {
-    await flagPendingUnknown(providerName, event.chargeId, event.reference, event.eventId, "missing_transaction");
-    return json(req, { ok: false, reason: "pending_unknown" });
-  }
-  let payment: VerifiedPayment | null | undefined;
-  try {
-    payment = await provider.getPayment(event.chargeId, {
-      transactionId: event.transactionId,
-      orderId: order.id,
-      amountCents: order.amount_cents,
-    });
-  } catch { payment = undefined; }
-  if (payment === undefined) {
-    await flagPendingUnknown(providerName, event.chargeId, event.reference, event.eventId, null);
-    return json(req, { ok: false, reason: "pending_unknown" });
-  }
-  const decision = confirmedReconcilePayment(order, payment, event.transactionId);
-  if (!decision.pay || !decision.transactionId || decision.amountCents == null || !decision.chargeId) {
-    await audit(order.id, decision.reason, { via: "webhook", eventId: event.eventId, received: decision.amountCents ?? null, transactionId: event.transactionId });
-    const mismatch = decision.reason === "amount_mismatch" || decision.reason === "qr_mismatch"
-      || decision.reason === "reference_mismatch" || decision.reason === "transaction_mismatch";
-    if (!mismatch && payment === null) {
-      await flagPendingUnknown(providerName, event.chargeId, event.reference, event.eventId, "open");
-    }
-    return json(req, { ok: false, reason: mismatch ? decision.reason : "pending_unknown" });
-  }
-
-  const { data, error } = await db.rpc("mark_order_paid", {
-    p_provider: providerName,
-    p_event_id: event.eventId,
-    p_charge_id: decision.chargeId,
-    p_order_id: event.reference,
-    p_amount_cents: decision.amountCents,
-    p_transaction_id: decision.transactionId,
-    p_tracking_key: decision.trackingKey ?? event.trackingKey ?? null,
-    p_payload: event.raw ?? {},
+  const settled = await settleWebhookPayment({
+    providerName,
+    event,
+    order,
+    getPayment: (chargeId, selector) => provider.getPayment(chargeId, selector),
+    payload: safePayload(event.raw),
   });
+  if (settled.outcome === "gate") {
+    await audit(settled.orderId, settled.reason, { chargeId: event.chargeId, reference: event.reference, eventId: event.eventId });
+    if (settled.reason === "missing_transaction" && order) {
+      await flagPendingUnknown(providerName, event.chargeId, order.id, event.eventId, "missing_transaction");
+      return json(req, { ok: false, reason: "pending_unknown" });
+    }
+    return json(req, { ok: false, reason: settled.reason === "amount_mismatch" ? "amount_mismatch" : "ref_mismatch" });
+  }
+  if (settled.outcome === "reject") {
+    await audit(settled.orderId, settled.reason, { via: "webhook", eventId: event.eventId, transactionId: event.transactionId });
+    return json(req, { ok: false, reason: settled.reason });
+  }
+  if (settled.outcome === "pending") {
+    if (settled.status && settled.status !== "open") {
+      console.error("getPayment", redactSecrets(settled.status));
+    }
+    await flagPendingUnknown(providerName, event.chargeId, settled.orderId, event.eventId, settled.status);
+    return json(req, { ok: false, reason: "pending_unknown" });
+  }
+
+  const { data, error } = await db.rpc("mark_order_paid", settled.rpc);
   if (error) throw new Error(error.message);
   return json(req, webhookBody(data as PaidResult));
 });
+
+function safePayload(raw: unknown): Record<string, unknown> {
+  if (!raw || typeof raw !== "object") return {};
+  const body = raw as Record<string, unknown>;
+  const metadata = body.metadata;
+  let safeMeta: Record<string, unknown> | undefined;
+  if (metadata && typeof metadata === "object") {
+    const meta = metadata as Record<string, unknown>;
+    safeMeta = {};
+    if (typeof meta.trackingKey === "string") safeMeta.trackingKey = meta.trackingKey;
+    const external = meta.externalMetadata;
+    if (external && typeof external === "object" && typeof (external as Record<string, unknown>).orderId === "string") {
+      safeMeta.externalMetadata = { orderId: (external as Record<string, unknown>).orderId };
+    }
+  }
+  return {
+    type: body.type ?? null,
+    transactionId: body.transactionId ?? null,
+    codiQrId: body.codiQrId ?? null,
+    amount: body.amount ?? null,
+    metadata: safeMeta ?? null,
+  };
+}
 
 function webhookBody(result: PaidResult): Record<string, unknown> {
   if (result.duplicate || result.outcome === "duplicate" || result.outcome === "duplicate_transaction") {
