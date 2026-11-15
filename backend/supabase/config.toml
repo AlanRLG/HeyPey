@@ -440,3 +440,9 @@ verify_jwt = false      # la autenticación es la firma del proveedor
 
 [functions.reconcile]
 verify_jwt = false      # la autenticación es x-cron-secret
+
+[functions.catalog]
+verify_jwt = true       # PUT del catálogo; además exige ser dueño del puesto
+
+[functions.summary]
+verify_jwt = true       # corte del día; además exige ser dueño del puesto

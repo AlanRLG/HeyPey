@@ -32,6 +32,7 @@ R=$(pay "$ID1"); EVT=$(jq -r .eventId <<<"$R")
 check "webhook PAID" "$(jq -r .webhook.state <<<"$R")" "PAID"
 check "estado PAID" "$(state "$ID1")" "PAID"
 check "vista cliente con palabra tras PAID" "$(cust "$ID1" | jq -r .secretWord)" "$(jq -r .secretWord <<<"$O1")"
+check "no se cancela una orden PAID" "$(curl -s -o /dev/null -w '%{http_code}' "${A[@]}" -X POST "$FN/orders/$ID1/cancel")" "409"
 
 echo "2. Evento duplicado"
 R=$(pay "$ID1" "{\"eventId\":\"$EVT\"}")
@@ -49,8 +50,13 @@ O3=$(create 9000 codi); ID3=$(jq -r .orderId <<<"$O3")
 
 echo "5. Pago después de cancelar"
 check "cancelar" "$(curl -s "${A[@]}" -X POST "$FN/orders/$ID3/cancel" | jq -r .state)" "CANCELLED"
-check "pago tardío marcado" "$(jq -r .webhook.latePayment <<<"$(pay "$ID3")")" "true"
-check "sigue CANCELLED" "$(state "$ID3")" "CANCELLED"
+R=$(pay "$ID3")
+check "pago tardío marcado" "$(jq -r .webhook.latePayment <<<"$R")" "true"
+check "el dinero queda PAID" "$(state "$ID3")" "PAID"
+PUB=$(cust "$ID3")
+if [[ -z "$PUB" ]]; then ok "el cliente no ve el pago tardío"; else
+  check "el cliente no recibe la palabra del pago tardío" "$(jq -r '.secretWord // "null"' <<<"$PUB")" "null"
+fi
 curl -s "${A[@]}" -X POST "$FN/orders/$ID2/cancel" > /dev/null
 
 echo "6. Efectivo"

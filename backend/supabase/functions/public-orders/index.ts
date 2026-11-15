@@ -26,7 +26,8 @@ Deno.serve(async (req) => {
       .eq("stall_id", stallId).eq("method", "codi").gte("created_at", since)
       .order("created_at", { ascending: false }).limit(10);
     if (error) throw error;
-    return json(req, { orders: ((data ?? []) as OrderRow[]).map(customerView) });
+    const visible = ((data ?? []) as OrderRow[]).filter((o) => !o.late_payment);
+    return json(req, { orders: visible.map(customerView) });
   } catch (error) {
     console.error("public-orders", error);
     return json(req, { error: "internal_error" }, 500);

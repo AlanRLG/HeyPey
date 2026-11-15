@@ -86,7 +86,8 @@ Se cargan con `supabase secrets set`. Los nombres son los usados en la spec o **
 | `ENABLE_MOCK_PAY` * | `true` solo en dev y demo con Mock; `false` con pagos reales | Manual |
 | `CRON_SECRET` * | Autentica la llamada de `pg_cron` a `reconcile` | `openssl rand -hex 32` |
 | `MIN_AMOUNT_CENTS` * | Monto mínimo por orden (ver brecha B1) | `500` en producción, `1` en pruebas con pey |
-| `PEY_API_KEY` *, `PEY_WEBHOOK_SECRET` *, `PEY_BASE_URL` * | Adaptador `providers/pey.ts` | `portal.pey.mx` / `docs.pey.mx` **[VERIFICAR nombres y esquema de firma]** |
+| `PEY_LIVE_ENABLED` | Barrera del adaptador. `false` no llama a la red | `false` hasta una activación explícita |
+| `PEY_API_KEY` *, `PEY_WEBHOOK_SECRET` *, `PEY_BASE_URL` *, `PEY_BANK_ACCOUNT_ID` | Adaptador `providers/pey.ts` (`POST /codi/qr`, Standard Webhooks) | `portal.pey.mx` / `docs.pey.mx`. No copies una clave `sk_live` ni una CLABE |
 
 Supabase inyecta solas `SUPABASE_URL`, `SUPABASE_ANON_KEY` y `SUPABASE_SERVICE_ROLE_KEY` en las Edge Functions;
 no las pongas en `secrets set` (los nombres que empiezan con `SUPABASE_` están reservados).
@@ -108,10 +109,12 @@ MOCK_WEBHOOK_SECRET=
 ENABLE_MOCK_PAY=true
 CRON_SECRET=
 MIN_AMOUNT_CENTS=500
-# Nivel 4
+# Nivel 4. false impide llamar a pey aunque el puesto diga provider=pey.
+PEY_LIVE_ENABLED=false
 PEY_API_KEY=
 PEY_WEBHOOK_SECRET=
 PEY_BASE_URL=
+PEY_BANK_ACCOUNT_ID=
 ```
 
 ```bash
@@ -181,10 +184,7 @@ documentación vigente de *Realtime Authorization* antes de seguir.
 Si el simulador web llama a las Edge Functions desde el navegador, cada función debe responder el
 preflight `OPTIONS` y devolver `Access-Control-Allow-Origin` (y `Allow-Headers` con `authorization, apikey, content-type`).
 
-**B7. El adaptador `pey.ts` no está especificado.**
-La spec solo define la interfaz `PaymentProvider`. Los endpoints, el campo de referencia (en el borrador original
-aparecía `numRef`), el formato del webhook y el esquema de firma de pey hay que tomarlos de `docs.pey.mx`.
-No los asumas.
+**B7. El adaptador pey no está activado.** El código sigue `docs.pey.mx` (`POST /codi/qr`, montos en pesos, expiración mínima de 360 s, Standard Webhooks) y las pruebas usan HTTP falso. `PEY_LIVE_ENABLED` vale `false`. El OpenAPI 2026-10-20 no documenta una clave de idempotencia en `POST /codi/qr` ni un endpoint para cancelar el QR: un claim en curso no se suelta por tiempo, y si la respuesta es incierta no se crea otro QR. El webhook se confirma con `GET /transaction/{transactionId}` (estado `PAID`, `payableId` del QR, monto y `metadata.orderId`). No hay `getStatus`: sin un `transactionId` o una orden, no se inventa `pending`. Si el QR ya se creó y no se pudo guardar, el claim sigue; `record_held_charge` anota ese QR y `recover_stuck_charge` lo publica sin crear otro. La conciliación sin webhook recorre `GET /transaction/codi/qr/{id}` y elige un pago de esa orden, no el primero de la lista. [VERIFICAR] con un evento real que `metadata.orderId` vuelva en `metadata.externalMetadata.orderId` y que `payableId` sea el IDC del QR.
 
 ### 3.3 Migración correctiva `0004_mock_and_limits.sql`
 
@@ -237,14 +237,14 @@ verify_jwt = false      # la autenticación es la firma del proveedor
 [functions.reconcile]
 verify_jwt = false      # la autenticación es x-cron-secret
 
-# orders y mock-pay conservan verify_jwt = true (por defecto)
+# orders, mock-pay, catalog y summary conservan verify_jwt = true
 # public-orders usa verify_jwt = false y solo devuelve customerView para puestos mock públicos
 ```
 
 ### 4.3 Aplicar migraciones
 
 ```bash
-supabase db push        # aplica 0001 → 0004 en el proyecto enlazado
+supabase db push        # aplica 0001 → 0008 en el proyecto enlazado
 ```
 
 Si falla en `0003` por la política de `realtime.messages`, es el punto **[VERIFICAR]** de la spec (B5): corrige
@@ -389,9 +389,9 @@ Lo que dice la hoja del evento y lo que sigue pendiente:
 
 Checklist de integración:
 
-- [ ] Implementar `providers/pey.ts` siguiendo la interfaz `PaymentProvider` con los endpoints reales de `docs.pey.mx`.
-- [ ] Confirmar qué campo de referencia devuelve pey en el webhook (debe regresar `order.id` o algo que permita mapearlo).
-- [ ] Implementar `verifyWebhook` con **el esquema de firma real** de pey (encabezado, algoritmo y tolerancia de tiempo).
+- [x] `providers/pey.ts` sigue `POST /codi/qr` y `GET /transaction/codi/qr/{id}`. Cubierto con `fetch` falso; no llama a `api.pey.mx`.
+- [ ] Confirmar con un evento real que `metadata.orderId` regresa en `metadata.externalMetadata.orderId`.
+- [x] `verifyWebhook` usa Standard Webhooks (`webhook-id`, `webhook-timestamp`, `webhook-signature`), probado con firmas de prueba.
 - [ ] Confirmar si el evento trae la **clave de rastreo** (`tracking_key`).
 - [ ] Registrar en pey la URL de webhook: `https://<PROJECT_REF>.supabase.co/functions/v1/webhooks/pey`.
 - [ ] Cargar `PEY_*` con `supabase secrets set`, y `MIN_AMOUNT_CENTS=1` mientras pruebes con $0.01.
@@ -601,7 +601,7 @@ Esperado: la orden pasa a `PAID`; el comerciante ve la tarjeta en verde; el clie
 - [ ] Cobro → pago simulado → verde + anuncio con la palabra correcta.
 - [ ] **Webhook duplicado:** `mock-pay` dos veces con el mismo `eventId` → un solo anuncio (`payment_events` tiene una fila).
 - [ ] **Firma inválida o monto distinto:** responde 401 o queda registrado en `audit_log` (`amount_mismatch`, `ref_mismatch`).
-- [ ] **Pago después de cancelar o expirar:** `late_payment = true` y aviso privado.
+- [ ] **Pago después de cancelar o expirar:** la orden queda `PAID` con `late_payment = true` y el anuncio público no lleva la palabra.
 - [ ] **Caída del WebSocket** durante la espera: el polling cada 5 s recupera el estado.
 - [ ] **Dos órdenes simultáneas:** palabras distintas y anuncio de la correcta.
 - [ ] **Palabra nunca en `/public-orders` antes del pago** (revisar la respuesta HTTP sin iniciar sesión).
@@ -638,7 +638,7 @@ Checklist del formulario de entrega (domingo 15 de noviembre, 1:00 PM hora CDMX;
 | Apagar el simulador de pagos | `supabase secrets set ENABLE_MOCK_PAY=false` |
 | Revertir funciones | `git checkout <tag>` y `supabase functions deploy <nombre>` |
 | Revertir esquema | No hay migraciones *down*: en local `supabase db reset`; en la nube, una migración correctiva nueva |
-| Retención de transcripciones | La spec fija 30 días: programa un `delete` periódico sobre `orders.utterance_text` **[pendiente de implementar]** |
+| Retención de transcripciones | `reconcile` llama a `purge_old_utterances` (30 días) en cada pasada. No se guarda audio |
 | Robo de un dispositivo | Revocar sesiones del usuario en Authentication → Users |
 
 ---

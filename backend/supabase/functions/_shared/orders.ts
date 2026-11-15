@@ -14,6 +14,12 @@ export interface OrderRow {
   items: unknown;
   provider: string | null;
   provider_charge_id: string | null;
+  tracking_key?: string | null;
+  replaced_by?: string | null;
+  reconcile_attempts?: number;
+  reconcile_unknown_since?: string | null;
+  next_reconcile_at?: string | null;
+  reconcile_alerted_at?: string | null;
   created_at: string;
 }
 
@@ -31,6 +37,8 @@ export function merchantView(o: OrderRow) {
     expiresAt: o.expires_at,
     paidAt: o.paid_at,
     latePayment: o.late_payment,
+    trackingKey: o.tracking_key ?? null,
+    replacedBy: o.replaced_by ?? null,
     items: o.items,
     createdAt: o.created_at,
   };
@@ -45,6 +53,7 @@ export function customerView(o: OrderRow) {
     state: o.state,
     qrPayload: o.state === "AWAITING_PAYMENT" ? o.qr_payload : null,
     expiresAt: o.expires_at,
-    secretWord: o.state === "PAID" ? o.secret_word : null,
+    // El pago tardío es PAID, pero la palabra no sale por la pantalla pública.
+    secretWord: o.state === "PAID" && !o.late_payment ? o.secret_word : null,
   };
 }

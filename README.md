@@ -4,26 +4,27 @@ Repositorio base para el hack de Cursor. El producto propuesto permite a un come
 
 ## Estado
 
-**Nivel 1 construido (backend + MockProvider + simulador web), sin dinero real.** La versión original pasó 22 comprobaciones contra Supabase local. Tras separar los accesos, hay que volver a ejecutar `tools/deploy/e2e_mock.sh` con la cuenta nueva.
+**Nivel 1 construido y verificado en Supabase con MockProvider, sin dinero real.** Las migraciones `0006`–`0008` están aplicadas en el proyecto de demo; se desplegaron `orders`, `mock-pay`, `catalog`, `summary`, `webhooks`, `reconcile` y `public-orders`. La prueba alojada `tools/test/e2e_mock_remote.mjs` pasó 19 comprobaciones: login, orden, pago simulado, webhook duplicado, monto incorrecto, pago tardío, efectivo y corte. Las reglas de base también se comprueban con `npm test` en `tools/test` (Postgres embebido, sin red). El adaptador pey está escrito y cubierto con HTTP falso; `PEY_LIVE_ENABLED` permanece en `false`.
 
 | Funciona | Es simulado | Falta |
 |---|---|---|
-| Órdenes con número diario y palabra secreta de un solo uso; idempotencia; efectivo (`PAID_CASH`); cancelación y vencimiento (cron + polling) | El banco (`MockProvider`, tabla `mock_charges`) y el QR (`MOCKCODI|SIMULADO|...`, no es CoDi válido) | Voz (VAD, whisper.cpp, parser), app Android |
-| Webhook firmado (HMAC) con idempotencia, validación de referencia, monto y doble verificación con `getStatus` | El botón del comerciante llama a `/mock-pay`, solo para puestos `provider = 'mock'` y usuarios dueños | Adaptador pey® (`providers/pey.ts` es un stub a propósito) |
-| La vista pública del cliente consulta `/public-orders`: la palabra aparece **solo** al pasar a `PAID`; el comerciante inicia sesión manualmente | Cuenta y puesto de demo con datos ficticios | Retención de 30 días de transcripciones |
-| Pago tardío (después de cancelar/expirar) marcado como `late_payment` y aviso privado al comerciante | | |
+| Órdenes con número diario y palabra de un solo uso (24 h, o últimas 200); idempotencia; reintento si el QR falló; efectivo (`PAID_CASH`); corrección; lectura de una orden; catálogo y corte del día | El banco (`MockProvider`, tabla `mock_charges`) y el QR (`MOCKCODI|SIMULADO|...`, no es CoDi válido) | Voz (VAD, whisper.cpp, parser), app Android. El simulador web aún no llama a corregir, catálogo ni corte |
+| Webhook firmado (HMAC en mock, Standard Webhooks en pey). El pago se marca con el identificador y el monto que devuelve el proveedor | El botón del comerciante llama a `/mock-pay`, solo para puestos `provider = 'mock'` y usuarios dueños | Activar pey: hace falta una clave rotada, `PEY_LIVE_ENABLED=true` y un puesto `provider='pey'`. Hoy no hay cobros reales |
+| La vista pública consulta `/public-orders`: la palabra aparece **solo** en un `PAID` que no sea tardío | Cuenta y puesto de demo con datos ficticios | |
+| Pago tardío: la orden cancelada o expirada pasa a `PAID` con `late_payment`; el aviso es solo del comerciante | | |
+| Conciliación: si el proveedor no contesta, `PENDING_UNKNOWN` hasta 30 min y luego alerta, sin darla por expirada. `purge_old_utterances` borra transcripciones a los 30 días | | |
 
-El despliegue en la nube se hace con `tools/deploy/deploy_cloud.sh` (ver [DEPLOY.md](DEPLOY.md)). Tras reemplazar al usuario de demo, hay que crear y vincular un puesto nuevo con `tools/deploy/link_demo_user.sql`, poner su `STALL_ID` público en `tools/simulator/config.js` y desplegar `public-orders` y `mock-pay` en Supabase. Mientras `STALL_ID` esté vacío, la página muestra “Simulador sin configurar”.
+El despliegue en la nube se describe en [DEPLOY.md](DEPLOY.md). El usuario y puesto de prueba están vinculados en Supabase; el `STALL_ID` público sigue vacío en `tools/simulator/config.js`, por lo que la página muestra “Simulador sin configurar”. Para probar el backend alojado desde una terminal, define `TEST_STALL_ID` con el UUID del puesto y ejecuta `node tools/test/e2e_mock_remote.mjs`; el script pide las credenciales de la cuenta demo sin guardarlas en el repo.
 
 Simulador: [copiloto-zeroui.vercel.app](https://copiloto-zeroui.vercel.app/) (`demo.html` muestra comerciante y cliente lado a lado). Los cambios en `main` se despliegan automáticamente con Vercel.
 
 ### Pagos tardíos, fallas y devoluciones
 
-- **Pago tardío** (llega después de cancelar o expirar): la orden no cambia de estado, se marca `late_payment = true`, se registra en `audit_log` y el comerciante recibe un aviso privado. La devolución es manual con el proveedor.
+- **Pago tardío** (llega después de cancelar o expirar): la orden pasa a `PAID` con `late_payment = true`, queda en `audit_log` y el aviso es solo para el comerciante. La vista pública no recibe la palabra. La devolución es manual.
 - **Falla del proveedor al crear la carga**: la orden pasa a `FAILED` y no se muestra QR.
 - **Webhook con firma inválida**: 401 y registro `invalid_signature`; no cambia nada.
 - **Monto o referencia distintos**: se registra `amount_mismatch` / `ref_mismatch`; la orden sigue esperando pago.
-- **Webhook dice pagado pero el proveedor no lo confirma**: `PENDING_UNKNOWN`; la conciliación vuelve a consultar cada minuto.
+- **Webhook dice pagado pero el proveedor no lo confirma**: `PENDING_UNKNOWN`. La conciliación reintenta con espera creciente hasta 30 min y, si el proveedor sigue sin contestar, deja una alerta. No marca `PAID`.
 - **Devoluciones**: no automatizadas en el MVP. [VERIFICAR] política y API de devoluciones de pey®.
 
 La especificación de referencia es `Modulo2_Copiloto_Acustico_ZeroUI_v3.pdf`, entregada por el autor del proyecto. No se incluye el PDF en el repositorio para evitar publicar un documento de trabajo sin necesidad.
@@ -31,10 +32,11 @@ La especificación de referencia es `Modulo2_Copiloto_Acustico_ZeroUI_v3.pdf`, e
 ## Estructura
 
 ```text
-backend/supabase/       Migraciones 0001–0005 y Edge Functions (orders, webhooks, reconcile, mock-pay, public-orders)
+backend/supabase/       Migraciones 0001–0008 y Edge Functions (orders, webhooks, reconcile, mock-pay, public-orders, catalog, summary)
 android/                App Kotlin, modos Comerciante y Cliente (por construir)
 tools/simulator/        Simulador web estático (comerciante, cliente, demo lado a lado)
 tools/deploy/           Despliegue a la nube, cuenta demo y prueba de punta a punta
+tools/test/             Pruebas del backend Mock contra Postgres embebido (`npm test`) y Supabase alojado
 tools/words/            Genera la migración de palabras desde data/words/
 tools/eval/             Evaluación de audio y parser (por construir)
 data/golden/            Casos de referencia del parser (por construir)

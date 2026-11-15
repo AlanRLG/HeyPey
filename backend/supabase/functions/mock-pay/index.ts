@@ -33,13 +33,25 @@ Deno.serve(async (req) => {
   const eventId = typeof body.eventId === "string" && body.eventId ? body.eventId : `evt_${crypto.randomUUID()}`;
   const amountCents = Number.isInteger(body.amountCents) ? body.amountCents : order.amount_cents;
   const badSignature = body.badSignature === true;
+  const newTrackingKey = `MOCK${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
 
-  // El "banco" liquida la carga si el monto coincide. Puede ocurrir aunque el puesto ya la haya
-  // cancelado o haya expirado (así se prueba el pago tardío, que el servidor marca como late_payment).
+  // El "banco" liquida la carga si el monto coincide. El identificador queda en la carga
+  // para que la conciliación lo lea y no tenga que inventarlo.
   if (!badSignature && amountCents === order.amount_cents) {
-    await db.from("mock_charges").update({ status: "settled" }).eq("charge_id", order.provider_charge_id)
-      .in("status", ["pending", "cancelled", "expired"]);
+    const { error } = await db.from("mock_charges").update({
+      status: "settled",
+      transaction_id: newTrackingKey,
+      tracking_key: newTrackingKey,
+    }).eq("charge_id", order.provider_charge_id).in("status", ["pending", "cancelled", "expired"]);
+    if (error) return json(req, { error: "mock_settlement_failed" }, 500);
   }
+
+  // Un webhook repetido debe describir el mismo pago. Lee el identificador que
+  // quedó guardado, incluso si otra solicitud liquidó la carga al mismo tiempo.
+  const { data: charge, error: chargeError } = await db.from("mock_charges")
+    .select("transaction_id, tracking_key").eq("charge_id", order.provider_charge_id).maybeSingle();
+  if (chargeError || !charge) return json(req, { error: "mock_charge_not_found" }, 500);
+  const trackingKey = charge.transaction_id || charge.tracking_key || newTrackingKey;
 
   const payload = JSON.stringify({
     eventId,
@@ -47,7 +59,8 @@ Deno.serve(async (req) => {
     reference: order.id,
     amountCents,
     status: "settled",
-    trackingKey: `MOCK${Date.now()}`,
+    trackingKey,
+    transactionId: trackingKey,
     simulated: true,
   });
   const signature = badSignature ? "t=0,v1=deadbeef" : await signMockPayload(payload);

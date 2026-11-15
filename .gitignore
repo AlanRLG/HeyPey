@@ -15,3 +15,4 @@ android/local.properties
 .DS_Store
 Thumbs.db
 !.env.secrets.example
+CURSOR_BACKEND.md

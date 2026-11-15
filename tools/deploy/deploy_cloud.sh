@@ -32,9 +32,11 @@ CRON_SECRET=$(openssl rand -hex 32)
 MIN_AMOUNT_CENTS=500
 ORDER_TTL_SECONDS=180
 ALLOWED_ORIGINS=https://copiloto-zeroui.vercel.app,http://localhost:3000
+PEY_LIVE_ENABLED=false
 SECRETS
   chmod 600 .env.secrets
 fi
+grep -q '^PEY_LIVE_ENABLED=' .env.secrets || echo 'PEY_LIVE_ENABLED=false' >> .env.secrets
 set -a; source .env.secrets; set +a
 
 echo "==> Secretos de funciones"
@@ -43,7 +45,7 @@ supabase secrets set --env-file .env.secrets.functions --remote --yes
 rm -f .env.secrets.functions
 
 echo "==> Edge Functions"
-for f in orders webhooks reconcile mock-pay public-orders; do
+for f in orders webhooks reconcile mock-pay public-orders catalog summary; do
   supabase functions deploy "$f" --remote --use-api --yes
 done
 

@@ -1,0 +1,11 @@
+{
+  "name": "copiloto-mock-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-strip-types --experimental-detect-module --test mock_backend.test.ts pey.test.ts"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.3.14"
+  }
+}

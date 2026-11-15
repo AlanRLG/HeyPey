@@ -1,11 +1,21 @@
 // webhooks — POST /webhooks/<provider>. Sin JWT (verify_jwt=false): la autenticación es la firma.
-// Orden de validación: firma → idempotencia (payment_events) → referencia → monto → getStatus.
+// El evento y el cambio de estado se confirman juntos en mark_order_paid. Si getPayment no
+// confirma ese transactionId, el evento no queda consumido y la orden pasa a PENDING_UNKNOWN.
 import { audit, serviceClient } from "../_shared/db.ts";
 import { json } from "../_shared/http.ts";
-import { getProvider } from "../_shared/providers/index.ts";
 import type { OrderRow } from "../_shared/orders.ts";
+import { getProvider } from "../_shared/providers/index.ts";
+import { confirmedReconcilePayment } from "../_shared/reconcile_payment.ts";
+import type { VerifiedPayment } from "../_shared/providers/types.ts";
 
-const PAYABLE = ["AWAITING_PAYMENT", "PENDING_UNKNOWN"];
+interface PaidResult {
+  outcome: string;
+  duplicate?: boolean;
+  announced?: boolean;
+  state?: string;
+  latePayment?: boolean;
+  orderId?: string | null;
+}
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") return json(req, { error: "method" }, 405);
@@ -22,56 +32,99 @@ Deno.serve(async (req) => {
     return json(req, { error: "invalid_signature" }, 401);
   }
 
+  if (event.status !== "settled") {
+    await audit(null, "provider_event", { provider: providerName, status: event.status, eventId: event.eventId });
+    return json(req, { ok: true, ignored: event.status });
+  }
+
   const db = serviceClient();
-
-  // Idempotencia: un evento repetido se reconoce (200) pero no vuelve a procesarse ni anunciarse.
-  const { data: inserted, error: insErr } = await db.from("payment_events")
-    .upsert({ provider: providerName, event_id: event.eventId, charge_id: event.chargeId, payload: event.raw },
-      { onConflict: "provider,event_id", ignoreDuplicates: true })
-    .select("id");
-  if (insErr) throw new Error(insErr.message);
-  if (!inserted?.length) return json(req, { ok: true, duplicate: true });
-
-  const { data: orderData } = await db.from("orders").select("*").eq("provider_charge_id", event.chargeId).maybeSingle();
-  const order = orderData as OrderRow | null;
+  const { data: orderData } = await db.from("orders").select("id, amount_cents, provider, provider_charge_id")
+    .eq("provider_charge_id", event.chargeId).maybeSingle();
+  const order = orderData as Pick<OrderRow, "id" | "amount_cents" | "provider" | "provider_charge_id"> | null;
   if (!order || order.id !== event.reference || order.provider !== providerName) {
     await audit(order?.id ?? null, "ref_mismatch", { chargeId: event.chargeId, reference: event.reference, eventId: event.eventId });
     return json(req, { ok: false, reason: "ref_mismatch" });
   }
-  await db.from("payment_events").update({ order_id: order.id }).eq("provider", providerName).eq("event_id", event.eventId);
-
   if (event.amountCents !== order.amount_cents) {
     await audit(order.id, "amount_mismatch", { expected: order.amount_cents, received: event.amountCents, eventId: event.eventId });
     return json(req, { ok: false, reason: "amount_mismatch" });
   }
-  if (event.status !== "settled") {
-    await audit(order.id, "provider_event", { status: event.status, eventId: event.eventId });
-    return json(req, { ok: true, ignored: event.status });
-  }
 
-  // Doble verificación: consulta independiente al proveedor.
-  const status = await provider.getStatus(event.chargeId).catch(() => null);
-  if (status !== "settled") {
-    const { data: upd } = await db.from("orders").update({ state: "PENDING_UNKNOWN" })
-      .eq("id", order.id).eq("state", "AWAITING_PAYMENT").select("id");
-    await audit(order.id, "status_mismatch", { webhook: event.status, getStatus: status, changed: !!upd?.length });
+  if (!event.transactionId) {
+    await flagPendingUnknown(providerName, event.chargeId, event.reference, event.eventId, "missing_transaction");
     return json(req, { ok: false, reason: "pending_unknown" });
   }
-
-  const { data: paid } = await db.from("orders")
-    .update({ state: "PAID", paid_at: new Date().toISOString() })
-    .eq("id", order.id).in("state", PAYABLE).select("id");
-
-  if (paid?.length) {
-    await audit(order.id, "state_change", { from: order.state, to: "PAID", eventId: event.eventId, trackingKey: event.trackingKey });
-    return json(req, { ok: true, state: "PAID" });
+  let payment: VerifiedPayment | null | undefined;
+  try {
+    payment = await provider.getPayment(event.chargeId, {
+      transactionId: event.transactionId,
+      orderId: order.id,
+      amountCents: order.amount_cents,
+    });
+  } catch { payment = undefined; }
+  if (payment === undefined) {
+    await flagPendingUnknown(providerName, event.chargeId, event.reference, event.eventId, null);
+    return json(req, { ok: false, reason: "pending_unknown" });
+  }
+  const decision = confirmedReconcilePayment(order, payment, event.transactionId);
+  if (!decision.pay || !decision.transactionId || decision.amountCents == null || !decision.chargeId) {
+    await audit(order.id, decision.reason, { via: "webhook", eventId: event.eventId, received: decision.amountCents ?? null, transactionId: event.transactionId });
+    const mismatch = decision.reason === "amount_mismatch" || decision.reason === "qr_mismatch"
+      || decision.reason === "reference_mismatch" || decision.reason === "transaction_mismatch";
+    if (!mismatch && payment === null) {
+      await flagPendingUnknown(providerName, event.chargeId, event.reference, event.eventId, "open");
+    }
+    return json(req, { ok: false, reason: mismatch ? decision.reason : "pending_unknown" });
   }
 
-  // Pago que llega después de cancelar o expirar: bandera y aviso privado al comerciante.
-  if (["CANCELLED", "EXPIRED"].includes(order.state)) {
-    await db.from("orders").update({ late_payment: true }).eq("id", order.id);
-    await audit(order.id, "late_payment", { state: order.state, eventId: event.eventId });
-    return json(req, { ok: true, latePayment: true });
-  }
-  return json(req, { ok: true, state: order.state });
+  const { data, error } = await db.rpc("mark_order_paid", {
+    p_provider: providerName,
+    p_event_id: event.eventId,
+    p_charge_id: decision.chargeId,
+    p_order_id: event.reference,
+    p_amount_cents: decision.amountCents,
+    p_transaction_id: decision.transactionId,
+    p_tracking_key: decision.trackingKey ?? event.trackingKey ?? null,
+    p_payload: event.raw ?? {},
+  });
+  if (error) throw new Error(error.message);
+  return json(req, webhookBody(data as PaidResult));
 });
+
+function webhookBody(result: PaidResult): Record<string, unknown> {
+  if (result.duplicate || result.outcome === "duplicate" || result.outcome === "duplicate_transaction") {
+    return { ok: true, duplicate: true, state: result.state ?? null, latePayment: !!result.latePayment };
+  }
+  if (result.outcome === "paid") return { ok: true, state: "PAID", latePayment: false };
+  if (result.outcome === "late_paid") return { ok: true, state: "PAID", latePayment: true };
+  if (result.outcome === "amount_mismatch") return { ok: false, reason: "amount_mismatch" };
+  if (result.outcome === "ref_mismatch") return { ok: false, reason: "ref_mismatch" };
+  return { ok: false, reason: result.outcome ?? "rejected" };
+}
+
+async function flagPendingUnknown(
+  providerName: string,
+  chargeId: string,
+  reference: string,
+  eventId: string,
+  status: string | null,
+): Promise<void> {
+  const db = serviceClient();
+  const { data } = await db.from("orders").select("id, state, provider").eq("provider_charge_id", chargeId).maybeSingle();
+  const order = data as Pick<OrderRow, "id" | "state" | "provider"> | null;
+  if (!order || order.id !== reference || order.provider !== providerName) {
+    await audit(order?.id ?? null, "ref_mismatch", { chargeId, reference, eventId, getStatus: status });
+    return;
+  }
+  const now = new Date().toISOString();
+  const { data: upd } = await db.from("orders").update({
+    state: "PENDING_UNKNOWN",
+    next_reconcile_at: now,
+  }).eq("id", order.id).eq("state", "AWAITING_PAYMENT").select("id");
+  await audit(order.id, "status_mismatch", {
+    webhook: "settled",
+    getStatus: status,
+    eventId,
+    changed: !!upd?.length,
+  });
+}

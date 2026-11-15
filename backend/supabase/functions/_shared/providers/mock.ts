@@ -1,9 +1,8 @@
 // MockProvider: simula un cobro CoDi sin banco ni dinero real.
-// Las cargas viven en la tabla mock_charges (brecha B2) para que getStatus sea real.
+// Las cargas viven en mock_charges. getPayment lee esa fila; no hay un estado suelto.
 import { serviceClient } from "../db.ts";
-import type { ChargeStatus, CreateChargeInput, CreateChargeResult, PaymentProvider, WebhookEvent } from "./types.ts";
-
-const SIGNATURE_TOLERANCE_S = 300;
+import { signMockPayloadWithSecret, verifyMockSignature } from "./mock_sign.ts";
+import type { ChargeStatus, CreateChargeInput, CreateChargeResult, PaymentProvider, PaymentSelector, WebhookEvent } from "./types.ts";
 
 function secret(): string {
   const s = Deno.env.get("MOCK_WEBHOOK_SECRET");
@@ -11,22 +10,13 @@ function secret(): string {
   return s;
 }
 
-async function hmacHex(key: string, message: string): Promise<string> {
-  const k = await crypto.subtle.importKey("raw", new TextEncoder().encode(key), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const sig = await crypto.subtle.sign("HMAC", k, new TextEncoder().encode(message));
-  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
-
 /** Firma con el formato `t=<unix>,v1=<hmac_sha256(secret, "<t>.<body>")>`. */
 export async function signMockPayload(body: string, timestamp = Math.floor(Date.now() / 1000)): Promise<string> {
-  return `t=${timestamp},v1=${await hmacHex(secret(), `${timestamp}.${body}`)}`;
+  return signMockPayloadWithSecret(secret(), body, timestamp);
+}
+
+export function mockQrPayload(chargeId: string, amountCents: number, orderId: string): string {
+  return `MOCKCODI|SIMULADO|${chargeId}|${(amountCents / 100).toFixed(2)}|MXN|${orderId}`;
 }
 
 export const mockProvider: PaymentProvider = {
@@ -41,15 +31,25 @@ export const mockProvider: PaymentProvider = {
       reference: input.orderId,
     });
     if (error) throw new Error(`mock_charges: ${error.message}`);
-    const amount = (input.amountCents / 100).toFixed(2);
-    // Carga útil claramente simulada: no es un QR CoDi válido.
-    return { chargeId, qrPayload: `MOCKCODI|SIMULADO|${chargeId}|${amount}|MXN|${input.orderId}` };
+    return { chargeId, qrPayload: mockQrPayload(chargeId, input.amountCents, input.orderId), expiresAt: input.expiresAt };
   },
 
-  async getStatus(chargeId: string): Promise<ChargeStatus> {
-    const { data, error } = await serviceClient().from("mock_charges").select("status").eq("charge_id", chargeId).maybeSingle();
+  async getPayment(chargeId: string, selector?: PaymentSelector) {
+    const { data, error } = await serviceClient().from("mock_charges")
+      .select("charge_id, status, amount_cents, reference, transaction_id, tracking_key")
+      .eq("charge_id", chargeId).maybeSingle();
     if (error) throw new Error(`mock_charges: ${error.message}`);
-    return (data?.status as ChargeStatus) ?? "failed";
+    if (!data || data.status !== "settled" || typeof data.transaction_id !== "string" || !data.transaction_id) return null;
+    if (selector?.transactionId && data.transaction_id !== selector.transactionId) return null;
+    if (selector?.orderId && data.reference !== selector.orderId) return null;
+    if (!Number.isInteger(data.amount_cents)) return null;
+    return {
+      chargeId: data.charge_id as string,
+      transactionId: data.transaction_id,
+      amountCents: data.amount_cents as number,
+      trackingKey: (data.tracking_key as string | null) ?? null,
+      reference: (data.reference as string | null) ?? null,
+    };
   },
 
   async cancelCharge(chargeId: string): Promise<void> {
@@ -58,21 +58,19 @@ export const mockProvider: PaymentProvider = {
 
   async verifyWebhook(req: Request, rawBody: string): Promise<WebhookEvent | null> {
     const header = req.headers.get("x-mock-signature") ?? "";
-    const parts = Object.fromEntries(header.split(",").map((p) => p.trim().split("=") as [string, string]));
-    const t = Number(parts.t);
-    if (!parts.v1 || !Number.isFinite(t)) return null;
-    if (Math.abs(Date.now() / 1000 - t) > SIGNATURE_TOLERANCE_S) return null;
-    const expected = await hmacHex(secret(), `${t}.${rawBody}`);
-    if (!timingSafeEqual(expected, parts.v1)) return null;
-
-    const body = JSON.parse(rawBody);
+    if (!(await verifyMockSignature(secret(), header, rawBody))) return null;
+    let body: Record<string, unknown>;
+    try { body = JSON.parse(rawBody); } catch { return null; }
     return {
       eventId: String(body.eventId),
       chargeId: String(body.chargeId),
       reference: String(body.reference),
       amountCents: Number(body.amountCents),
       status: body.status as ChargeStatus,
-      trackingKey: body.trackingKey ?? null,
+      trackingKey: typeof body.trackingKey === "string" ? body.trackingKey : null,
+      transactionId: typeof body.transactionId === "string"
+        ? body.transactionId
+        : typeof body.trackingKey === "string" ? body.trackingKey : null,
       raw: body,
     };
   },
