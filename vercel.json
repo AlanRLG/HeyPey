@@ -1,5 +1,10 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "outputDirectory": "tools/simulator"
+  "installCommand": "npm --prefix tools/frontend ci",
+  "buildCommand": "npm --prefix tools/frontend run build",
+  "outputDirectory": "tools/frontend/dist",
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
 }

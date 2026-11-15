@@ -1,6 +1,6 @@
 # Copiloto Acústico Zero-UI
 
-Repositorio base para el hack de Cursor. El producto propuesto permite a un comerciante preparar cobros con la voz y confirmar pagos con una **palabra secreta de un solo uso**. La voz es la interfaz; la prueba del pago debe venir de un evento verificado por el servidor.
+Proyecto para el hack de Cursor. El producto permite a un comerciante preparar cobros y confirmar pagos con una **palabra secreta de un solo uso**. La voz sigue pendiente; la prueba del pago viene de un evento verificado por el servidor.
 
 ## Estado
 
@@ -18,9 +18,9 @@ La prueba que cuenta es una sola orden de $0.01: pasó a `PAID` porque el webhoo
 | Pago tardío: la orden cancelada o expirada pasa a `PAID` con `late_payment`; el aviso es solo del comerciante | | |
 | Conciliación: si el proveedor no contesta, `PENDING_UNKNOWN` hasta 30 min y luego alerta, sin darla por expirada. `purge_old_utterances` borra transcripciones a los 30 días | | |
 
-El despliegue en la nube se describe en [DEPLOY.md](DEPLOY.md). El usuario y puesto de prueba están vinculados en Supabase; el `STALL_ID` público sigue vacío en `tools/simulator/config.js`, por lo que la página muestra “Simulador sin configurar”. Para el Mock alojado, define `TEST_STALL_ID` con el UUID del puesto demo y ejecuta `node tools/test/e2e_mock_remote.mjs`. `node tools/test/e2e_pey_remote.mjs` solo lee; crear un QR pide la frase `CREAR QR DE UN CENTAVO` y reutiliza la clave de `tools/test/.pey-cent/`, carpeta ignorada por Git. Esa carpeta no se versiona. Ninguno de los dos scripts guarda ni imprime la contraseña ni el JWT.
+El despliegue en la nube se describe en [DEPLOY.md](DEPLOY.md). La nueva interfaz React vive en `tools/frontend/`; su `public/config.js` contiene únicamente la URL de Supabase, la clave pública `anon` y los IDs públicos de los puestos Mock y Pey. El comerciante inicia sesión para crear órdenes; la vista del cliente consulta `public-orders` sin sesión. Para el Mock alojado, define `TEST_STALL_ID` con el UUID del puesto demo y ejecuta `node tools/test/e2e_mock_remote.mjs`. `node tools/test/e2e_pey_remote.mjs` solo lee; crear un QR pide la frase `CREAR QR DE UN CENTAVO` y reutiliza la clave de `tools/test/.pey-cent/`, carpeta ignorada por Git. Esa carpeta no se versiona. Ninguno de los dos scripts guarda ni imprime la contraseña ni el JWT.
 
-Simulador: [copiloto-zeroui.vercel.app](https://copiloto-zeroui.vercel.app/) (`demo.html` muestra comerciante y cliente lado a lado). Los cambios en `main` se despliegan automáticamente con Vercel.
+Frontend: [copiloto-zeroui.vercel.app](https://copiloto-zeroui.vercel.app/) (al publicar este commit: `/demo` muestra comerciante y cliente lado a lado, `/comerciante` ofrece Mock y Pey después de iniciar sesión, y `/cliente` es pública). La demo predeterminada usa Mock y no mueve dinero; generar un QR real de Pey exige una segunda confirmación. Los cambios en `main` se despliegan automáticamente con Vercel.
 
 ### Pagos tardíos, fallas y devoluciones
 
@@ -38,7 +38,8 @@ La especificación de referencia es `Modulo2_Copiloto_Acustico_ZeroUI_v3.pdf`, e
 ```text
 backend/supabase/       Migraciones 0001–0009 y Edge Functions (orders, webhooks, reconcile, mock-pay, public-orders, catalog, summary)
 android/                App Kotlin, modos Comerciante y Cliente (por construir)
-tools/simulator/        Simulador web estático (comerciante, cliente, demo lado a lado)
+tools/frontend/         Frontend React/Vite con shadcn/ui, React Bits y rutas de demo
+tools/simulator/        Simulador estático anterior, conservado como referencia
 tools/deploy/           Despliegue a la nube, cuenta demo y prueba de punta a punta
 tools/test/             Pruebas del backend Mock contra Postgres embebido (`npm test`) y Supabase alojado
 tools/words/            Genera la migración de palabras desde data/words/
@@ -50,11 +51,11 @@ docs/                   Alcance y plan de demo
 
 ## Enfoque para la demo
 
-El flujo sin voz y con `MockProvider` ya está construido: crear orden, mostrar un QR de prueba, simular el pago, verificar el evento en el servidor y anunciar el número de orden con la palabra correcta. Pey ya está integrado y quedó verificado con una transferencia real de $0.01 por webhook. Faltan Android y el audio. Ver [plan de demo](docs/PLAN_DEMO.md).
+El flujo sin voz y con `MockProvider` ya está construido: crear orden, mostrar un QR de prueba, simular el pago, verificar el evento en el servidor y anunciar el número de orden con la palabra correcta. Pey ya está integrado y quedó verificado con una transferencia real de $0.01 por webhook. La interfaz React muestra ambos puestos; solo la vista autenticada del comerciante puede generar un QR real. Faltan Android y la entrada de voz. Ver [plan de demo](docs/PLAN_DEMO.md).
 
 ## Configuración de Vercel
 
-El proyecto ya está enlazado a este repositorio. Usa la raíz `/` y `main` como rama de producción. `vercel.json` fija el preset **Other** y el directorio de salida `tools/simulator`. El simulador es estático (sin compilación); su configuración pública vive en `tools/simulator/config.js`. Contiene solo URL, clave `anon` y `STALL_ID`. Nunca expongas contraseñas, tokens de pago, claves `service_role` ni secretos del proveedor en archivos servidos por Vercel.
+El proyecto ya está enlazado a este repositorio. Usa la raíz `/` y `main` como rama de producción. `vercel.json` instala y compila `tools/frontend`, sirve `tools/frontend/dist` y reescribe las rutas de la app a `index.html`. La configuración pública vive en `tools/frontend/public/config.js`. Nunca expongas contraseñas, tokens de pago, claves `service_role` ni secretos del proveedor en archivos servidos por Vercel.
 
 ## Principios que debe conservar la implementación
 
@@ -68,4 +69,4 @@ Los detalles del proveedor, políticas de Realtime, licencias de modelos y requi
 
 ## Abrir en Cursor
 
-Abre la carpeta raíz del repositorio. Cursor leerá `AGENTS.md` como contexto del proyecto. Siguiente tarea recomendada: app Android en modo manual (Nivel 2 de `DEPLOY.md`), reutilizando las mismas Edge Functions.
+Abre la carpeta raíz del repositorio. Cursor leerá `AGENTS.md` como contexto del proyecto. Para trabajar en el frontend, entra a `tools/frontend`, ejecuta `npm ci` y `npm run dev`. Siguiente tarea de producto: entrada de voz y app Android, reutilizando las mismas Edge Functions.

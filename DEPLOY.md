@@ -14,7 +14,7 @@ con la fuente primaria o con una prueba técnica antes de depender de él.
 > El primer QR venció sin pago y no es esa prueba. Las brechas B1–B6 están resueltas en el código.
 > La app Android y la voz (Niveles 2 y 3) aún no existen.
 > **Atajo:** `PROJECT_REF=<ref> DB_PASSWORD='<...>' STALL_ID=<uuid> tools/deploy/deploy_cloud.sh` despliega backend y
-> genera `tools/simulator/config.js` con datos públicos. La cuenta y el puesto se crean por separado; ver 4.5.
+> genera el `config.js` del simulador estático anterior. La interfaz React usa `tools/frontend/public/config.js`; ver sección 6.
 >
 > Esta guía respeta las reglas de `AGENTS.md`: el servidor es la autoridad del estado, la palabra secreta nunca
 > llega a la vista del cliente antes de un pago verificado y los montos van en centavos enteros. El repositorio no guarda
@@ -28,7 +28,7 @@ El sistema se despliega por capas. Cada nivel es demostrable por sí solo.
 
 | Nivel | Qué queda funcionando | Qué necesita | Para hackatón |
 |---|---|---|---|
-| **1** | Backend + proveedor simulado (Mock) + simulador web con link público | Supabase, hosting estático | **Imprescindible** |
+| **1** | Backend + proveedor simulado (Mock) + frontend web con link público | Supabase, Vercel/Vite | **Imprescindible** |
 | **2** | Nivel 1 + APK Android en modo manual (teclado, efectivo, QR, anuncio con palabra) | Android Studio, un teléfono | Recomendado |
 | **3** | Nivel 2 + voz (VAD, whisper.cpp, parser, diadema Bluetooth) | NDK, modelos, diadema | Solo si sobra tiempo |
 | **4** | El cobro pey de $0.01 ya quedó `PAID` por webhook | Cuenta pey ligada a la API key; el repo no guarda datos bancarios | Hecho ese centavo. La app y la voz siguen pendientes. El QR vencido no cuenta |
@@ -53,7 +53,7 @@ al Nivel 2, va como descarga adjunta.
 
 ### Cuentas
 - **Supabase** (plan gratuito alcanza para el MVP).
-- **Hosting estático** para el simulador: Vercel, Netlify o Cloudflare Pages.
+- **Hosting del frontend compilado**: Vercel sirve el build estático de Vite.
 - **GitHub** con el repositorio **público** (lo exige la entrega del evento).
 - **pey®**: acceso en `portal.mipey.mx` y documentación en `docs.pey.mx`. El puesto de demo sigue en `mock`. Un puesto pey es otro registro.
 
@@ -104,7 +104,7 @@ Solo la **anon key** va en los clientes. La `service_role` nunca sale del backen
 | Cliente | Archivo | Variables |
 |---|---|---|
 | Android | `android/local.properties` (no versionado) → `BuildConfig` | `SUPABASE_URL`, `SUPABASE_ANON_KEY` |
-| Simulador web (Vercel) | Opción A: `tools/simulator/config.js` (versionable: solo URL, anon key y puesto de demo). Opción B (Vite): variables del proyecto en Vercel | A: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `STALL_ID` · B: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` |
+| Frontend React (Vercel) | `tools/frontend/public/config.js`, versionable porque contiene solo datos públicos | `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `MOCK_STALL_ID`, `PEY_STALL_ID` |
 
 Archivos `.env.example` a incluir en el repo:
 
@@ -120,12 +120,6 @@ PEY_API_KEY=
 PEY_WEBHOOK_SECRET=
 PEY_BASE_URL=
 PEY_BANK_ACCOUNT_ID=
-```
-
-```bash
-# tools/simulator/.env.example   (solo opción B: Vite)
-VITE_SUPABASE_URL=https://<project-ref>.supabase.co
-VITE_SUPABASE_ANON_KEY=
 ```
 
 ---
@@ -283,9 +277,9 @@ Para el hackatón es más rápido:
 Crea el usuario en Authentication → Users y copia su `id` (UUID).
 
 **Demo pública:** crea un usuario dedicado en Authentication → Users con contraseña privada. El presentador inicia
-sesión en `merchant.html`; el jurado puede abrir `customer.html` sin credenciales. Nunca pongas la contraseña en
+sesión en `/demo` o `/comerciante`; el jurado puede abrir `/cliente` sin credenciales. Nunca pongas la contraseña en
 `config.js`. Después de crear el usuario, ejecuta `tools/deploy/link_demo_user.sql` en SQL Editor, sustituyendo el
-correo en sus dos lugares, y copia el `STALL_ID` devuelto a `tools/simulator/config.js`. El puesto usa `provider = 'mock'`.
+correo en sus dos lugares, y copia el `STALL_ID` devuelto a `tools/frontend/public/config.js` como `MOCK_STALL_ID`. El puesto usa `provider = 'mock'`.
 
 **Comerciante y puesto de prueba** (SQL Editor o `psql`):
 
@@ -421,70 +415,37 @@ Ese guion ya produjo la orden pagada. No hace falta otro cobro para documentar e
 
 ---
 
-## 6. Simulador web y Vercel (link público)
+## 6. Frontend React y Vercel (link público)
 
-**Estado actual:** el proyecto de Vercel ya está enlazado al repositorio
-([copiloto-zeroui.vercel.app](https://copiloto-zeroui.vercel.app/)). `main` es la rama de producción y cada push a
-`main` se despliega automáticamente. `vercel.json` fija `framework: null` y `outputDirectory: "tools/simulator"`, sin paso
-de compilación. Hoy `tools/simulator/index.html` es solo una pantalla de arranque.
+La interfaz nueva vive en `tools/frontend/`. `vercel.json` ejecuta `npm ci` y `npm run build` en esa carpeta, sirve `tools/frontend/dist` y reescribe las rutas de la aplicación a `index.html`. El simulador estático anterior queda en `tools/simulator/` como referencia; `tools/deploy/deploy_cloud.sh` todavía escribe su `config.js`, no el de React.
 
-**Qué debe cumplir el simulador** (`docs/PLAN_DEMO.md`):
+### Rutas y límites
 
-- Vistas separadas de **Comerciante** y **Cliente**, con la indicación visible **"Modo demo / sin dinero real"**.
-- El cliente ve número de orden, monto y un QR **claramente simulado**, y nunca la palabra antes de `PAID`.
-- El botón del comerciante llama a `mock-pay` en el servidor. **Ninguna acción del navegador puede marcar un pago como confirmado.**
-- El presentador usa sus credenciales privadas; el jurado abre la vista del cliente sin iniciar sesión.
+- `/` presenta el mecanismo y consulta la vista pública Mock.
+- `/demo` muestra comerciante y cliente lado a lado. Solo usa el puesto Mock; el QR y el pago son simulados.
+- `/comerciante` exige sesión Supabase. Permite elegir el puesto Mock o Pey; el modo Pey pide una segunda confirmación antes de crear un QR real. Ningún botón del navegador marca por sí mismo una orden Pey como pagada.
+- `/cliente` consulta `public-orders` sin sesión. `?modo=pey` muestra el puesto Pey; antes de `PAID` no recibe la palabra.
 
-### Opción A (recomendada): estático, sin compilación
+`tools/frontend/public/config.js` contiene la URL de Supabase, la clave pública `anon` y los dos IDs públicos de puesto. Nunca contiene `service_role`, `PEY_API_KEY`, `PEY_WEBHOOK_SECRET` ni credenciales del comerciante. La ruta `/demo` es la opción segura para el jurado: no mueve dinero.
 
-No requiere cambiar `vercel.json`. Estructura sugerida dentro de `tools/simulator/`:
+### Desarrollo y comprobación
 
-```
-index.html        # elige vista (o redirige)
-merchant.html     # tarjetas de órdenes con palabra privada, teclado manual, efectivo, cancelar
-customer.html     # QR simulado + monto + número; anuncio con palabra solo al pagar
-config.js         # solo SUPABASE_URL, SUPABASE_ANON_KEY y STALL_ID público
+Desde la raíz del repositorio:
+
+```powershell
+npm --prefix tools/frontend ci
+npm --prefix tools/frontend run dev
 ```
 
-- Carga `supabase-js` como módulo ESM desde un CDN, por ejemplo
-  `import { createClient } from "https://esm.sh/@supabase/supabase-js@2"` **[VERIFICAR versión y URL]**.
-- `config.js` puede versionarse: la **anon key es pública por diseño** y la protege RLS. La `service_role`
-  **nunca** va aquí ni en ningún archivo servido por Vercel.
-- El comerciante usa Realtime privado. El cliente consulta `public-orders` cada 3 segundos sin sesión.
+En otra terminal, mientras Vite esté activo, ejecuta `node tools/frontend/visual-check.mjs` para capturas y auditoría axe, y `node tools/frontend/browser-flow.mjs` para el flujo de navegador con respuestas simuladas. Este último verifica que Mock oculte la palabra hasta la confirmación y que Pey no cree un QR antes de la segunda confirmación; **no llama a Pey ni hace una transferencia**. El proxy de Vite permite consultar Edge Functions desde localhost; producción consulta Supabase desde el dominio permitido de Vercel.
 
-Prueba local sin instalar nada del proyecto:
-
-```bash
-npx serve tools/simulator      # abre http://localhost:3000
+```powershell
+npm --prefix tools/frontend run build
 ```
 
-### Opción B: con compilación (Vite)
-
-Solo si prefieres un framework. Cambia `vercel.json` para compilar y servir la carpeta de salida:
-
-```json
-{
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "framework": null,
-  "installCommand": "npm --prefix tools/simulator install",
-  "buildCommand": "npm --prefix tools/simulator run build",
-  "outputDirectory": "tools/simulator/dist"
-}
-```
-
-Define `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY` en Vercel (Settings → Environment Variables) y haz una
-prueba local con `npm run dev` dentro de `tools/simulator`. Las variables `VITE_*` terminan dentro del paquete
-publicado, así que tampoco aquí puede haber secretos.
-
-### Despliegue y verificación
-
-1. Trabaja en una rama y abre un PR: Vercel genera una URL de vista previa para probar antes de tocar producción.
-2. Al fusionar en `main`, Vercel publica en `copiloto-zeroui.vercel.app`.
-3. Agrega esa URL (y la de vista previa si la usas) a los orígenes permitidos de las Edge Functions (B6).
-4. Abre el sitio en una ventana privada y ejecuta el recorrido de `docs/PLAN_DEMO.md` completo.
+Antes de publicar, comprueba que el build termine, que `/demo` y `/cliente` carguen en móvil y escritorio, y que el estado de pago y la palabra procedan de las respuestas del servidor. Después de subir a `main`, verifica en Vercel que el deployment esté `READY` y abre las rutas en una ventana privada. La prueba real de $0.01 de Pey documentada en la sección 5.2 pertenece al backend; no sustituye una prueba de navegador del nuevo frontend con las credenciales privadas del presentador.
 
 ---
-
 ## 7. App Android
 
 ### 7.1 Configuración
